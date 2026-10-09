@@ -1,11 +1,7 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  hkdfSync,
-  timingSafeEqual,
-} from 'node:crypto';
+import { gcm } from '@noble/ciphers/aes';
+import { hkdf } from '@noble/hashes/hkdf';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha2';
 
 export const MAX_UINT64 = 0xffff_ffff_ffff_ffffn;
 export type Bytes = Uint8Array;
@@ -66,13 +62,10 @@ export function deriveKeys(
 } {
   const cid = utf8(channelId);
   const conn = typeof connectionId === 'string' ? utf8(connectionId) : connectionId;
-  const salt = createHash('sha256')
-    .update(concat(utf8('AACpipe'), cid, conn))
-    .digest();
+  const salt = sha256(concat(utf8('AACpipe'), cid, conn));
   const info = (name: string) =>
     concat(utf8('AACpipe\0v1\0'), lengthPrefix(cid), lengthPrefix(conn), utf8(name));
-  const expand = (name: string, size: number) =>
-    new Uint8Array(hkdfSync('sha256', Buffer.from(secret), salt, info(name), size));
+  const expand = (name: string, size: number) => hkdf(sha256, secret, salt, info(name), size);
   return {
     handshakeKey: expand('handshake', 32),
     publisherToSubscriber: expand('publisher->subscriber', 32),
@@ -83,13 +76,18 @@ export function deriveKeys(
 }
 
 export function hmacSha256(key: Bytes, data: Bytes): Bytes {
-  return new Uint8Array(createHmac('sha256', Buffer.from(key)).update(data).digest());
+  return hmac(sha256, key, data);
 }
 export function proof(key: Bytes, transcript: Bytes): Bytes {
   return hmacSha256(key, transcript);
 }
 export function equalBytes(a: Bytes, b: Bytes): boolean {
-  return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    difference |= a[index]! ^ b[index]!;
+  }
+  return difference === 0;
 }
 
 export function deterministicIv(prefix: Bytes, sequence: bigint): Bytes {
@@ -114,20 +112,11 @@ export function associatedData(
 }
 
 export function seal(key: Bytes, iv: Bytes, plaintext: Bytes, aad: Bytes): Bytes {
-  const cipher = createCipheriv('aes-256-gcm', Buffer.from(key), Buffer.from(iv));
-  cipher.setAAD(Buffer.from(aad));
-  return new Uint8Array(
-    Buffer.concat([cipher.update(Buffer.from(plaintext)), cipher.final(), cipher.getAuthTag()]),
-  );
+  return gcm(key, iv, aad).encrypt(plaintext);
 }
 export function open(key: Bytes, iv: Bytes, ciphertextAndTag: Bytes, aad: Bytes): Bytes {
   if (ciphertextAndTag.length < 16) throw new Error('ciphertext is missing authentication tag');
-  const decipher = createDecipheriv('aes-256-gcm', Buffer.from(key), Buffer.from(iv));
-  decipher.setAAD(Buffer.from(aad));
-  decipher.setAuthTag(Buffer.from(ciphertextAndTag.slice(-16)));
-  return new Uint8Array(
-    Buffer.concat([decipher.update(Buffer.from(ciphertextAndTag.slice(0, -16))), decipher.final()]),
-  );
+  return gcm(key, iv, aad).decrypt(ciphertextAndTag);
 }
 
 export const encrypt = seal;

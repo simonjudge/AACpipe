@@ -59,11 +59,23 @@ export function isChannelId(value: string): boolean {
   return cidPattern.test(value);
 }
 export function encodeBase64Url(value: Uint8Array): string {
-  return Buffer.from(value).toString('base64url');
+  let binary = '';
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
 }
 export function decodeBase64Url(value: string): Uint8Array {
   if (!b64Pattern.test(value) || value.length % 4 === 1) throw new Error('invalid base64url');
-  const bytes = new Uint8Array(Buffer.from(value, 'base64url'));
+  const padded = value
+    .replaceAll('-', '+')
+    .replaceAll('_', '/')
+    .padEnd(Math.ceil(value.length / 4) * 4, '=');
+  let binary: string;
+  try {
+    binary = atob(padded);
+  } catch {
+    throw new Error('invalid base64url');
+  }
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   if (encodeBase64Url(bytes) !== value) throw new Error('non-canonical base64url');
   return bytes;
 }

@@ -1,0 +1,39 @@
+:root {
+  font-family: system-ui, sans-serif;
+  background: #fff;
+  color: #111;
+}
+
+body {
+  max-width: 58rem;
+  margin: auto;
+  padding: 2rem;
+}
+
+section {
+  margin: 1rem 0;
+  padding: 1.5rem;
+  border: 2px solid #222;
+  border-radius: 0.5rem;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  image-rendering: pixelated;
+}
+
+.pairing-option {
+  display: inline-block;
+  max-width: 22rem;
+  margin: 1rem 1rem 1rem 0;
+  vertical-align: top;
+}
+
+a {
+  overflow-wrap: anywhere;
+}
+
+code {
+  font-size: 1rem;
+}

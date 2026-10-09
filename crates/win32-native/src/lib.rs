@@ -32,6 +32,14 @@ pub struct PipeRequest {
     pub payload: String,
 }
 
+#[napi(object)]
+pub struct PipeReceiveResult {
+    pub status: String,
+    pub connection_id: Option<u32>,
+    pub payload: Option<String>,
+    pub message: Option<String>,
+}
+
 #[napi]
 pub struct SecurePipeServer {
     #[cfg(windows)]
@@ -105,25 +113,46 @@ impl SecurePipeServer {
     }
 
     #[napi]
-    pub async fn receive(&self, timeout_ms: u32) -> NapiResult<PipeRequest> {
+    pub async fn receive(&self, timeout_ms: u32) -> PipeReceiveResult {
         #[cfg(windows)]
         {
             let state = self.inner.clone();
-            let received = napi::tokio::task::spawn_blocking(move || state.receive(timeout_ms))
-                .await
-                .map_err(|error| NapiError::new(Status::GenericFailure, error.to_string()))??;
-            Ok(PipeRequest {
-                connection_id: received.connection_id,
-                payload: received.payload,
-            })
+            match napi::tokio::task::spawn_blocking(move || state.receive(timeout_ms)).await {
+                Ok(Ok(received)) => PipeReceiveResult {
+                    status: "request".to_owned(),
+                    connection_id: Some(received.connection_id),
+                    payload: Some(received.payload),
+                    message: None,
+                },
+                Ok(Err(NativeError::Timeout)) => PipeReceiveResult {
+                    status: "timeout".to_owned(),
+                    connection_id: None,
+                    payload: None,
+                    message: None,
+                },
+                Ok(Err(error)) => PipeReceiveResult {
+                    status: "error".to_owned(),
+                    connection_id: None,
+                    payload: None,
+                    message: Some(error.to_string()),
+                },
+                Err(error) => PipeReceiveResult {
+                    status: "error".to_owned(),
+                    connection_id: None,
+                    payload: None,
+                    message: Some(error.to_string()),
+                },
+            }
         }
         #[cfg(not(windows))]
         {
             let _ = timeout_ms;
-            Err(NapiError::new(
-                Status::GenericFailure,
-                "AACpipe native integration requires Windows",
-            ))
+            PipeReceiveResult {
+                status: "error".to_owned(),
+                connection_id: None,
+                payload: None,
+                message: Some("AACpipe native integration requires Windows".to_owned()),
+            }
         }
     }
 

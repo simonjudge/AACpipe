@@ -8,7 +8,9 @@
     "@aacpipe/domain": "0.1.0",
     "@aacpipe/ipc-schema": "0.1.0",
     "@aacpipe/protocol": "0.1.0",
-    "@aacpipe/subscriber": "0.1.0"
+    "@aacpipe/subscriber": "0.1.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
   },
   "exports": {
     ".": "./src/main/index.ts"

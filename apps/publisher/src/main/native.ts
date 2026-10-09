@@ -6,14 +6,48 @@ export interface NativePipeRequest {
   readonly payload: string;
 }
 
+export interface NativePipeReceiveResult {
+  readonly status: string;
+  readonly connectionId?: number;
+  readonly payload?: string;
+  readonly message?: string;
+}
+
 export interface NativePipeServer {
   readonly pipeName: string;
-  receive(timeoutMs: number): Promise<NativePipeRequest>;
+  receive(timeoutMs: number): Promise<NativePipeReceiveResult>;
   respond(connectionId: number, response: string): Promise<void>;
 }
 
 export interface NativePublisherInstanceLock {
   readonly isOwner: boolean;
+}
+
+export function parseNativePipeReceiveResult(
+  value: NativePipeReceiveResult,
+): NativePipeRequest | undefined {
+  if (value.status === 'timeout') {
+    return undefined;
+  }
+  if (value.status === 'error') {
+    throw new Error(`Native pipe receive failed: ${value.message ?? 'unknown native error'}`);
+  }
+  const connectionId = value.connectionId;
+  if (
+    value.status !== 'request' ||
+    connectionId === undefined ||
+    !Number.isSafeInteger(connectionId) ||
+    connectionId < 1 ||
+    typeof value.payload !== 'string'
+  ) {
+    throw new Error(
+      'Native pipe request has an incompatible shape; rebuild the addon with "npm run native:build"',
+    );
+  }
+  return {
+    connectionId,
+    payload: value.payload,
+  };
 }
 
 interface NativeModule {

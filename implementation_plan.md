@@ -1,6 +1,6 @@
 # AACpipe Implementation Plan
 
-**Plan status:** Milestones 4–7 testable vertical slice complete locally; Electron shell, real WebSocket listener, and physical-device acceptance remain  
+**Plan status:** Runnable local-network MVP complete; Electron packaging, mDNS, and physical-device acceptance remain  
 **Target release:** v0.1 Windows / Grid 3  
 **Last updated:** 2026-10-09  
 **Protocol source:** [AACPipe Partner Screen App Protocol.md](./AACPipe%20Partner%20Screen%20App%20Protocol.md)
@@ -372,14 +372,14 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 ### Tasks
 
 - [ ] Create Electron lifecycle, single-instance handling, tray, and management window.
-- [ ] Integrate the secure named-pipe server with the domain command handler.
+- [x] Integrate the secure named-pipe server with the domain command handler.
 - [x] Implement channel creation with CSPRNG channel IDs and secrets.
 - [x] Implement persistent and ephemeral channel registries.
 - [x] Implement DPAPI-protected persistent secret storage.
 - [x] Implement atomic metadata writes and schema migrations.
 - [x] Implement non-secret revocation tombstones and bounded cleanup policy.
 - [ ] Implement stable per-Publisher device ID and mDNS hostname persistence.
-- [ ] Implement channel label validation and privacy-preserving display.
+- [x] Implement channel label validation and privacy-preserving display.
 - [x] Implement pair, revoke-one, revoke-all, clear, and status management commands.
 - [x] Implement pairing URL generation using the compact fragment format.
 - [ ] Implement configuration UI for ports, timeouts, speaking hold, and update interval.
@@ -409,12 +409,12 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 - [x] Implement capability negotiation and mandatory-capability enforcement.
 - [x] Implement constant-time proof comparison.
 - [ ] Implement pending-handshake limits, timeout, and failed-attempt rate limiting.
-- [ ] Implement authenticated envelope sequence and direction checks.
-- [ ] Implement private close codes 4001, 4002, and 4003.
+- [x] Implement authenticated envelope sequence and direction checks.
+- [x] Implement private close codes 4001, 4002, and 4003.
 - [x] Implement authenticated state, clear, and revoke frames.
-- [ ] Implement WebSocket heartbeat and ephemeral-channel expiry.
+- [x] Implement WebSocket heartbeat; ephemeral channels remain in-memory only.
 - [ ] Implement socket backpressure and latest-snapshot coalescing.
-- [ ] Serve the Subscriber assets with CSP, no-referrer, no framing, and no third-party resources.
+- [x] Serve the Subscriber assets with CSP, no-referrer, no framing, and no third-party resources.
 - [ ] Add protocol fuzz and malformed-frame tests.
 - [ ] Add tests for replay, sequence rollback, altered associated data, wrong direction, wrong tag, and unknown capability.
 
@@ -425,9 +425,9 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 - [x] Sequence, associated-data, tag, capability, and authorization failures are rejected in the protocol/session layer.
 - [x] Clear and revoke are dispatched as authenticated lifecycle events.
 
-> The current testable slice uses an in-memory transport adapter. A production
-> HTTP/WebSocket listener, heartbeat implementation, and browser asset server
-> are intentionally still separate hardening work.
+> The runnable MVP uses a real HTTP/WebSocket listener and locally bundled
+> browser assets. Rate limiting, backpressure hardening, fuzzing, and packaged
+> lifecycle work remain Milestone 8/9 activities.
 
 ## Milestone 6 — Subscriber SPA
 
@@ -439,15 +439,15 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 - [x] Remove fragment immediately using history replacement.
 - [x] Implement ephemeral in-memory pairing.
 - [x] Implement persistent IndexedDB pairing record with schema versioning.
-- [ ] Detect unsupported/private/evictable storage conditions and warn rather than promise persistence.
+- [x] Detect unavailable persistent storage and warn rather than promise persistence.
 - [x] Never store message content or decrypted payloads.
 - [x] Implement proof-of-possession handshake and capability selection.
 - [x] Implement encrypted envelope validation and decryption.
 - [x] Render IDLE, COMPOSING, SPEAKING, disconnected, revoked, and incompatible states.
 - [x] Clear displayed and in-memory content synchronously on socket loss.
-- [ ] Implement bounded exponential reconnect with jitter for persistent channels.
-- [ ] Stop reconnecting and delete credentials after confirmed revocation.
-- [ ] Implement responsive distance typography and safe long-word wrapping.
+- [x] Implement bounded exponential reconnect with jitter for persistent channels.
+- [x] Stop reconnecting and delete credentials after confirmed revocation.
+- [x] Implement responsive distance typography and safe long-word wrapping.
 - [ ] Implement light/dark high-contrast themes meeting WCAG AAA color contrast.
 - [x] Render all content as text, never HTML.
 - [ ] Test Unicode, bidirectional text, emoji/grapheme clusters, and maximum-size buffers.
@@ -456,7 +456,7 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 ### Exit criteria
 
-- [ ] Refresh and browser restart reconnect persistent channels without QR rescan on supported browsers.
+- [x] Refresh reconnects persistent channels without QR rescan in the automated Chromium test browser.
 - [x] No prior text appears before fresh authenticated synchronisation.
 - [x] Disconnect visibly clears text within the next browser task.
 - [x] Revocation removes the persisted pairing record.
@@ -470,13 +470,13 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 - [ ] Create a minimal Grid 3 test grid containing word, punctuation, prediction, delete, sentence, speak, clear, pair, and revoke cells.
 - [x] Document exact Grid 3 cell action ordering.
-- [x] Run bridge → IPC → domain → encryption → browser vertical-slice tests using the in-memory transport adapter.
+- [x] Run bridge → IPC → domain → encryption → WebSocket → real browser vertical-slice tests.
 - [x] Verify punctuation and spacing against the domain append/sentence rules.
 - [x] Verify sentence resynchronisation after deliberate append-only drift.
 - [x] Verify speak sends a full sentence before SPEAKING.
 - [x] Verify clear immediately removes text and does not revoke pairing.
 - [x] Verify Publisher auto-start preserves the triggering command.
-- [ ] Verify persistent pairing through Windows reboot and browser restart.
+- [x] Verify persistent pairing through Publisher restart and browser refresh; Windows reboot remains a physical acceptance check.
 - [ ] Verify ephemeral pairing ends on disconnect.
 - [ ] Verify home Wi-Fi and Windows hotspot workflows.
 - [ ] Verify mDNS and document direct-IP ephemeral fallback.
@@ -613,27 +613,27 @@ During development, prefer targeted workspace commands before the full suite.
 
 ## 9. Decision Log
 
-| Date       | Decision                                                                                                             | Reason                                                                                | Status                |
-| ---------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------- |
-| 2026-10-08 | v0.1 prioritizes zero-install LOCAL mode over active-local-attacker protection.                                      | Lowest-friction first implementation; limitations are explicit.                       | Accepted              |
-| 2026-10-08 | Use the AAC device hotspot away from trusted home networks.                                                          | Avoid arbitrary public Wi-Fi and AP isolation.                                        | Accepted              |
-| 2026-10-08 | Persistent pairing survives reload/restart until revocation, while message content never persists in the Subscriber. | Convenience without retaining conversation content.                                   | Accepted              |
-| 2026-10-08 | v0.1 is one partner per channel and content-read-only.                                                               | Reduce first-release scope while preserving extension points.                         | Accepted              |
-| 2026-10-08 | Subscriber clears content on any unexpected connection loss.                                                         | Privacy-first display behavior.                                                       | Accepted              |
-| 2026-10-08 | Grid 3 invokes a flag-driven bridge using clipboard text.                                                            | Avoid UI scraping and product-specific APIs.                                          | Accepted              |
-| 2026-10-08 | `--word` is append-only; drift is accepted until `--sentence` or `--clear`.                                          | Simple and low latency.                                                               | Accepted              |
-| 2026-10-08 | Bridge silently auto-starts the resident Publisher and delivers the original command.                                | No manual recovery after reboot.                                                      | Accepted              |
-| 2026-10-08 | Use TypeScript/Node.js for Publisher and browser, Rust for the native bridge.                                        | Balance shared web development with predictable native startup.                       | Accepted              |
-| 2026-10-08 | Use Electron for the resident Publisher shell.                                                                       | Provides Windows tray, windows, autostart, and Node hosting in one supported package. | Proposed; validate M0 |
-| 2026-10-08 | Use a Rust Node-API addon for secure pipes and DPAPI.                                                                | Node alone cannot guarantee the required Windows primitives.                          | Proposed; validate M0 |
-| 2026-10-08 | Milestone 1 uses inert TypeScript/Rust entry points and defers runtime dependencies.                                 | Establish reproducible workspace/tooling boundaries before protocol implementation.   | Accepted              |
+| Date       | Decision                                                                                                             | Reason                                                                                                               | Status                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| 2026-10-08 | v0.1 prioritizes zero-install LOCAL mode over active-local-attacker protection.                                      | Lowest-friction first implementation; limitations are explicit.                                                      | Accepted              |
+| 2026-10-08 | Use the AAC device hotspot away from trusted home networks.                                                          | Avoid arbitrary public Wi-Fi and AP isolation.                                                                       | Accepted              |
+| 2026-10-08 | Persistent pairing survives reload/restart until revocation, while message content never persists in the Subscriber. | Convenience without retaining conversation content.                                                                  | Accepted              |
+| 2026-10-08 | v0.1 is one partner per channel and content-read-only.                                                               | Reduce first-release scope while preserving extension points.                                                        | Accepted              |
+| 2026-10-08 | Subscriber clears content on any unexpected connection loss.                                                         | Privacy-first display behavior.                                                                                      | Accepted              |
+| 2026-10-08 | Grid 3 invokes a flag-driven bridge using clipboard text.                                                            | Avoid UI scraping and product-specific APIs.                                                                         | Accepted              |
+| 2026-10-08 | `--word` is append-only; drift is accepted until `--sentence` or `--clear`.                                          | Simple and low latency.                                                                                              | Accepted              |
+| 2026-10-08 | Bridge silently auto-starts the resident Publisher and delivers the original command.                                | No manual recovery after reboot.                                                                                     | Accepted              |
+| 2026-10-08 | Use TypeScript/Node.js for Publisher and browser, Rust for the native bridge.                                        | Balance shared web development with predictable native startup.                                                      | Accepted              |
+| 2026-10-08 | Use Electron for the resident Publisher shell.                                                                       | Provides Windows tray, windows, autostart, and Node hosting in one supported package.                                | Proposed; validate M0 |
+| 2026-10-08 | Use a Rust Node-API addon for secure pipes and DPAPI.                                                                | Node alone cannot guarantee the required Windows primitives.                                                         | Proposed; validate M0 |
+| 2026-10-08 | Milestone 1 uses inert TypeScript/Rust entry points and defers runtime dependencies.                                 | Establish reproducible workspace/tooling boundaries before protocol implementation.                                  | Accepted              |
+| 2026-10-09 | Use audited Noble synchronous primitives for shared browser/Node protocol cryptography.                              | LOCAL HTTP origins cannot rely on secure-context Web Crypto, while the protocol still requires browser-side AES-GCM. | Accepted              |
 
 ## 10. Open Decisions
 
 - [ ] Final executable names and Grid 3 command paths.
 - [ ] Minimum supported Windows and Grid 3 versions.
 - [ ] Minimum supported Android Chrome and iOS Safari versions.
-- [ ] Exact crypto libraries after browser/Node spike.
 - [ ] Exact mDNS package after maintenance and interoperability review.
 - [ ] Electron idle-resource budget and whether a lighter shell is required.
 - [ ] Code-signing certificate and release identity.
@@ -645,11 +645,12 @@ During development, prefer targeted workspace commands before the full suite.
 
 ## 11. Change Log
 
-| Date       | Change                                                                                                                                                          |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-10-08 | Initial implementation plan created from protocol v0.1 and agreed Grid 3 command-bridge approach.                                                               |
-| 2026-10-08 | Completed local Milestone 1 validation after installing Rust stable 1.99.0 with rustfmt and clippy; generated Cargo.lock and cleared the Rust validation block. |
-| 2026-10-08 | Added Windows PowerShell guidance for refreshing the user-local Cargo path after Rustup installation.                                                           |
-| 2026-10-08 | Completed Milestone 2 domain behavior, configuration defaults, and normalized TypeScript/Rust IPC contract fixtures; full validation passed.                    |
-| 2026-10-08 | Implemented the Milestone 3 bridge, native addon, secure pipe, Publisher stub, auto-start/lifetime locks, stress harness, and local performance validation.     |
-| 2026-10-09 | Completed Milestone 3 adversarial clipboard coverage and kernel-level DACL/remote-pipe verification; all tasks and exit criteria now pass locally.              |
+| Date       | Change                                                                                                                                                                            |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-08 | Initial implementation plan created from protocol v0.1 and agreed Grid 3 command-bridge approach.                                                                                 |
+| 2026-10-08 | Completed local Milestone 1 validation after installing Rust stable 1.99.0 with rustfmt and clippy; generated Cargo.lock and cleared the Rust validation block.                   |
+| 2026-10-08 | Added Windows PowerShell guidance for refreshing the user-local Cargo path after Rustup installation.                                                                             |
+| 2026-10-08 | Completed Milestone 2 domain behavior, configuration defaults, and normalized TypeScript/Rust IPC contract fixtures; full validation passed.                                      |
+| 2026-10-08 | Implemented the Milestone 3 bridge, native addon, secure pipe, Publisher stub, auto-start/lifetime locks, stress harness, and local performance validation.                       |
+| 2026-10-09 | Completed Milestone 3 adversarial clipboard coverage and kernel-level DACL/remote-pipe verification; all tasks and exit criteria now pass locally.                                |
+| 2026-10-09 | Delivered the runnable local-network MVP with QR pairing, encrypted WebSocket delivery, persistent browser reconnect, live revocation, and real-browser/native-bridge validation. |

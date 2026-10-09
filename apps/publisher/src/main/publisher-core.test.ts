@@ -58,4 +58,23 @@ describe('Publisher channel persistence', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('does not restore ephemeral channels after restart', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'aacpipe-'));
+    const filePath = path.join(directory, 'channels.json');
+    try {
+      const first = await PublisherCore.create(filePath, testProtector);
+      const ephemeral = await first.pair('ephemeral', 'Temporary');
+      const persistent = await first.pair('persistent', 'Partner');
+
+      const second = await PublisherCore.create(filePath, testProtector);
+      expect(second.registry.get(ephemeral.channelId)).toBeUndefined();
+      expect(second.registry.get(persistent.channelId)).toMatchObject({
+        channelType: 'persistent',
+        label: 'Partner',
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

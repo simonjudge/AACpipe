@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>AACpipe Partner Screen</title>
+    <link rel="stylesheet" href="/subscriber.css" />
+  </head>
+  <body data-connection-state="disconnected">
+    <header>
+      <span id="channel-label"></span>
+      <span id="status" role="status" aria-live="polite">Starting...</span>
+    </header>
+    <main>
+      <p id="message" aria-label="AAC message"></p>
+      <p id="storage-warning" class="warning" hidden>
+        This browser cannot save the pairing. Keep this tab open or scan the QR code again.
+      </p>
+    </main>
+    <script type="module" src="/subscriber.js"></script>
+  </body>
+</html>

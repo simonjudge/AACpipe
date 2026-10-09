@@ -152,10 +152,12 @@ export class ChannelRegistry {
     const payload = JSON.stringify({
       version: 1,
       channels: await Promise.all(
-        [...this.#records.values()].map(async (record) => ({
-          ...record,
-          secret: await this.#protector.protect(record.secret),
-        })),
+        [...this.#records.values()]
+          .filter((record) => record.channelType === 'persistent')
+          .map(async (record) => ({
+            ...record,
+            secret: await this.#protector.protect(record.secret),
+          })),
       ),
       tombstones: [...this.#tombstones],
     });
@@ -332,8 +334,8 @@ export class PublisherCore {
       throw new Error('channel revoked or unknown');
     const store = this.#stores.get(channelId) ?? new CompositionStore();
     this.#stores.set(channelId, store);
-    const connection = new PublisherConnection(channel, store, transport);
     const connections = this.#connections.get(channelId) ?? new Set<PublisherConnection>();
+    const connection = new PublisherConnection(channel, store, transport);
     connections.add(connection);
     this.#connections.set(channelId, connections);
     return connection;
@@ -363,6 +365,7 @@ export class PublisherCore {
             revision: event.snapshot.revision,
             state: event.snapshot.state,
             buffer: { text: event.snapshot.text, truncated: event.snapshot.truncated },
+            ...(record.label === undefined ? {} : { meta: { channelLabel: record.label } }),
           };
     for (const connection of this.#connections.get(channelId) ?? [])
       connection.sendEvent(protocolEvent);
@@ -370,6 +373,32 @@ export class PublisherCore {
 
   async revoke(channelId: string): Promise<void> {
     for (const connection of this.#connections.get(channelId) ?? []) connection.revoke();
+    this.#connections.delete(channelId);
+    this.#stores.delete(channelId);
     await this.registry.revoke(channelId);
+  }
+
+  async revokeAll(): Promise<void> {
+    for (const record of this.registry.list()) {
+      for (const connection of this.#connections.get(record.channelId) ?? []) connection.revoke();
+    }
+    this.#connections.clear();
+    this.#stores.clear();
+    await this.registry.revokeAll();
+  }
+
+  disconnect(channelId: string, connection: PublisherConnection): void {
+    this.#connections.get(channelId)?.delete(connection);
+  }
+
+  subscriberCount(channelId?: string): number {
+    if (channelId !== undefined) return this.#connections.get(channelId)?.size ?? 0;
+    let count = 0;
+    for (const connections of this.#connections.values()) count += connections.size;
+    return count;
+  }
+
+  async applyAll(command: ContentCommand): Promise<void> {
+    await Promise.all(this.registry.list().map((record) => this.apply(record.channelId, command)));
   }
 }

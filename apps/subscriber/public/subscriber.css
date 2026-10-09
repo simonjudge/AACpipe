@@ -1,0 +1,78 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  background: #fff;
+  color: #111;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: #fff;
+  color: #111;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: #111;
+  color: #fff;
+  font-size: clamp(1rem, 2vw, 1.4rem);
+}
+
+main {
+  display: grid;
+  place-items: center;
+  padding: clamp(1rem, 5vw, 4rem);
+}
+
+#message {
+  max-width: 30ch;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+  white-space: pre-wrap;
+  font-size: clamp(2.5rem, 10vw, 8rem);
+  font-weight: 650;
+  line-height: 1.12;
+}
+
+#message[data-speaking] {
+  outline: 0.15em solid #005fcc;
+  outline-offset: 0.2em;
+}
+
+.warning {
+  align-self: end;
+  padding: 0.75rem;
+  border: 2px solid #8a4b00;
+  background: #fff4cc;
+  color: #3d2100;
+  font-size: 1rem;
+}
+
+body[data-connection-state='disconnected'] #message,
+body[data-connection-state='connecting'] #message {
+  visibility: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root,
+  body {
+    background: #080808;
+    color: #fff;
+  }
+
+  header {
+    background: #eee;
+    color: #111;
+  }
+}
