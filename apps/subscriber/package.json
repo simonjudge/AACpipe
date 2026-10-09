@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@aacpipe/crypto": "0.1.0",
+    "@aacpipe/protocol": "0.1.0"
+  },
   "exports": {
     ".": "./src/index.ts"
   }

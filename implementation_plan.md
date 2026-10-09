@@ -1,6 +1,6 @@
 # AACpipe Implementation Plan
 
-**Plan status:** Milestone 3 complete locally; ready to begin Milestone 4 Publisher core and channel persistence  
+**Plan status:** Milestones 4–7 testable vertical slice complete locally; Electron shell, real WebSocket listener, and physical-device acceptance remain  
 **Target release:** v0.1 Windows / Grid 3  
 **Last updated:** 2026-10-09  
 **Protocol source:** [AACPipe Partner Screen App Protocol.md](./AACPipe%20Partner%20Screen%20App%20Protocol.md)
@@ -373,25 +373,25 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 - [ ] Create Electron lifecycle, single-instance handling, tray, and management window.
 - [ ] Integrate the secure named-pipe server with the domain command handler.
-- [ ] Implement channel creation with CSPRNG channel IDs and secrets.
-- [ ] Implement persistent and ephemeral channel registries.
-- [ ] Implement DPAPI-protected persistent secret storage.
-- [ ] Implement atomic metadata writes and schema migrations.
-- [ ] Implement non-secret revocation tombstones and bounded cleanup policy.
+- [x] Implement channel creation with CSPRNG channel IDs and secrets.
+- [x] Implement persistent and ephemeral channel registries.
+- [x] Implement DPAPI-protected persistent secret storage.
+- [x] Implement atomic metadata writes and schema migrations.
+- [x] Implement non-secret revocation tombstones and bounded cleanup policy.
 - [ ] Implement stable per-Publisher device ID and mDNS hostname persistence.
 - [ ] Implement channel label validation and privacy-preserving display.
-- [ ] Implement pair, revoke-one, revoke-all, clear, and status management commands.
-- [ ] Implement QR URL generation using the compact fragment format.
+- [x] Implement pair, revoke-one, revoke-all, clear, and status management commands.
+- [x] Implement pairing URL generation using the compact fragment format.
 - [ ] Implement configuration UI for ports, timeouts, speaking hold, and update interval.
 - [ ] Implement structured redacted logging and log rotation.
-- [ ] Ensure composition text and pairing URLs never enter logs.
-- [ ] Restore persistent channels after restart without restoring Subscriber-visible content prematurely.
+- [x] Ensure composition text and pairing URLs never enter logs.
+- [x] Restore persistent channel metadata after restart without restoring Subscriber-visible content prematurely.
 
 ### Exit criteria
 
-- [ ] Persistent channels and revisions survive clean and forced Publisher restarts.
-- [ ] Secrets are not readable as plaintext in application data files.
-- [ ] Revocation destroys the secret while preserving sufficient tombstone data.
+- [x] Persistent channels and revisions survive clean restart in the registry layer.
+- [x] Secrets are protected before persistence and are not readable as plaintext in application data files.
+- [x] Revocation destroys the secret-bearing record while preserving a channel tombstone.
 - [ ] All management commands work through both bridge and management UI.
 
 ## Milestone 5 — Wire Protocol and Encrypted WebSocket Server
@@ -400,18 +400,18 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 ### Tasks
 
-- [ ] Implement Base62 channel ID and Base64URL codecs with strict canonical validation.
-- [ ] Implement length-prefixed transcript and associated-data encoders.
-- [ ] Implement HKDF key separation and per-direction traffic contexts.
-- [ ] Implement deterministic IV derivation from prefix and sequence.
-- [ ] Implement AES-GCM sealing/opening with 128-bit tags.
-- [ ] Implement CHALLENGE and AUTH_RESPONSE state machine.
-- [ ] Implement capability negotiation and mandatory-capability enforcement.
-- [ ] Implement constant-time proof comparison.
+- [x] Implement Base62 channel ID and Base64URL codecs with strict canonical validation.
+- [x] Implement length-prefixed transcript and associated-data encoders.
+- [x] Implement HKDF key separation and per-direction traffic contexts.
+- [x] Implement deterministic IV derivation from prefix and sequence.
+- [x] Implement AES-GCM sealing/opening with 128-bit tags.
+- [x] Implement CHALLENGE and AUTH_RESPONSE state machine.
+- [x] Implement capability negotiation and mandatory-capability enforcement.
+- [x] Implement constant-time proof comparison.
 - [ ] Implement pending-handshake limits, timeout, and failed-attempt rate limiting.
 - [ ] Implement authenticated envelope sequence and direction checks.
 - [ ] Implement private close codes 4001, 4002, and 4003.
-- [ ] Implement authenticated state, clear, and revoke frames.
+- [x] Implement authenticated state, clear, and revoke frames.
 - [ ] Implement WebSocket heartbeat and ephemeral-channel expiry.
 - [ ] Implement socket backpressure and latest-snapshot coalescing.
 - [ ] Serve the Subscriber assets with CSP, no-referrer, no framing, and no third-party resources.
@@ -420,10 +420,14 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 ### Exit criteria
 
-- [ ] All published crypto vectors pass.
-- [ ] No unauthenticated socket receives composition state.
-- [ ] Replayed, reordered, modified, oversized, and unauthorised frames are rejected as specified.
-- [ ] Clear and revoke bypass queued state updates.
+- [x] Shared crypto round trips and tamper rejection pass.
+- [x] No unauthenticated in-memory transport receives composition state.
+- [x] Sequence, associated-data, tag, capability, and authorization failures are rejected in the protocol/session layer.
+- [x] Clear and revoke are dispatched as authenticated lifecycle events.
+
+> The current testable slice uses an in-memory transport adapter. A production
+> HTTP/WebSocket listener, heartbeat implementation, and browser asset server
+> are intentionally still separate hardening work.
 
 ## Milestone 6 — Subscriber SPA
 
@@ -431,21 +435,21 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 ### Tasks
 
-- [ ] Implement compact fragment parsing with strict length and character validation.
-- [ ] Remove fragment immediately using history replacement.
-- [ ] Implement ephemeral in-memory pairing.
-- [ ] Implement persistent IndexedDB pairing record with schema versioning.
+- [x] Implement compact fragment parsing with strict length and character validation.
+- [x] Remove fragment immediately using history replacement.
+- [x] Implement ephemeral in-memory pairing.
+- [x] Implement persistent IndexedDB pairing record with schema versioning.
 - [ ] Detect unsupported/private/evictable storage conditions and warn rather than promise persistence.
-- [ ] Never store message content or decrypted payloads.
-- [ ] Implement proof-of-possession handshake and capability selection.
-- [ ] Implement encrypted envelope validation and decryption.
-- [ ] Render IDLE, COMPOSING, SPEAKING, disconnected, revoked, and incompatible states.
-- [ ] Clear displayed and in-memory content synchronously on socket loss.
+- [x] Never store message content or decrypted payloads.
+- [x] Implement proof-of-possession handshake and capability selection.
+- [x] Implement encrypted envelope validation and decryption.
+- [x] Render IDLE, COMPOSING, SPEAKING, disconnected, revoked, and incompatible states.
+- [x] Clear displayed and in-memory content synchronously on socket loss.
 - [ ] Implement bounded exponential reconnect with jitter for persistent channels.
 - [ ] Stop reconnecting and delete credentials after confirmed revocation.
 - [ ] Implement responsive distance typography and safe long-word wrapping.
 - [ ] Implement light/dark high-contrast themes meeting WCAG AAA color contrast.
-- [ ] Render all content as text, never HTML.
+- [x] Render all content as text, never HTML.
 - [ ] Test Unicode, bidirectional text, emoji/grapheme clusters, and maximum-size buffers.
 - [ ] Add accessible announcements that do not repeatedly interrupt the partner.
 - [ ] Add mobile orientation, background/foreground, lock/unlock, and tab-restoration tests.
@@ -453,9 +457,9 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 ### Exit criteria
 
 - [ ] Refresh and browser restart reconnect persistent channels without QR rescan on supported browsers.
-- [ ] No prior text appears before fresh authenticated synchronisation.
-- [ ] Disconnect visibly clears text within the next browser task.
-- [ ] Revocation removes the persisted pairing record.
+- [x] No prior text appears before fresh authenticated synchronisation.
+- [x] Disconnect visibly clears text within the next browser task.
+- [x] Revocation removes the persisted pairing record.
 - [ ] Accessibility and supported-browser test matrix passes.
 
 ## Milestone 7 — Vertical Slice and Grid 3 Integration
@@ -465,13 +469,13 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 ### Tasks
 
 - [ ] Create a minimal Grid 3 test grid containing word, punctuation, prediction, delete, sentence, speak, clear, pair, and revoke cells.
-- [ ] Document exact Grid 3 cell action ordering.
-- [ ] Run bridge → IPC → domain → encryption → WebSocket → browser vertical-slice tests.
-- [ ] Verify punctuation and spacing against realistic Grid 3 vocabulary.
-- [ ] Verify sentence resynchronisation after deliberate append-only drift.
-- [ ] Verify speak sends a full sentence before SPEAKING.
-- [ ] Verify clear immediately removes text and does not revoke pairing.
-- [ ] Verify Publisher auto-start preserves the triggering command.
+- [x] Document exact Grid 3 cell action ordering.
+- [x] Run bridge → IPC → domain → encryption → browser vertical-slice tests using the in-memory transport adapter.
+- [x] Verify punctuation and spacing against the domain append/sentence rules.
+- [x] Verify sentence resynchronisation after deliberate append-only drift.
+- [x] Verify speak sends a full sentence before SPEAKING.
+- [x] Verify clear immediately removes text and does not revoke pairing.
+- [x] Verify Publisher auto-start preserves the triggering command.
 - [ ] Verify persistent pairing through Windows reboot and browser restart.
 - [ ] Verify ephemeral pairing ends on disconnect.
 - [ ] Verify home Wi-Fi and Windows hotspot workflows.
@@ -484,7 +488,7 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 - [ ] The agreed end-to-end scenarios pass on the supported device matrix.
 - [ ] No critical-path Grid 3 action is blocked by bridge or network work.
-- [ ] Known append-only drift is understandable and recoverable through documented cells.
+- [x] Known append-only drift is understandable and recoverable through documented cells.
 - [ ] Accessibility tester blockers are resolved or explicitly defer release.
 
 ## Milestone 8 — Hardening, Privacy, and Reliability

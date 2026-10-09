@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@aacpipe/crypto": "0.1.0",
     "@aacpipe/domain": "0.1.0",
-    "@aacpipe/ipc-schema": "0.1.0"
+    "@aacpipe/ipc-schema": "0.1.0",
+    "@aacpipe/protocol": "0.1.0",
+    "@aacpipe/subscriber": "0.1.0"
   },
   "exports": {
     ".": "./src/main/index.ts"

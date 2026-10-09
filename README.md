@@ -4,11 +4,15 @@ AACpipe is a local-first partner screen for an AAC user. It publishes the user's
 composed message to a browser on a trusted local network or the AAC device's
 hotspot.
 
-The repository has completed **Milestone 3: Native Bridge and Windows
-Primitives**. The Rust Grid 3 bridge, per-user secure named pipe, DPAPI
-integration, native Node addon, Publisher stub, cross-language IPC contract,
-adversarial clipboard coverage, and kernel-level pipe security checks are
-operational and locally validated. Protocol behavior is defined in
+The repository has completed implementation through **Milestone 7** for the
+testable vertical slice. The Rust Grid 3 bridge, persistent Publisher channel
+registry, DPAPI-protected metadata, encrypted proof-of-possession session,
+browser-facing Subscriber controller, pairing storage adapters, and in-memory
+end-to-end test path are operational and locally validated. The current
+vertical-slice crypto adapter is Node-based; a browser Web Crypto/bundled
+implementation is still required before deploying the Subscriber SPA. Physical
+Grid 3, Android, and iOS acceptance testing remains a release activity because
+those devices are not available in this workspace. Protocol behavior is defined in
 [the protocol specification](./AACPipe%20Partner%20Screen%20App%20Protocol.md).
 
 ## Development prerequisites
@@ -43,6 +47,7 @@ npm run format:check
 npm run typecheck
 npm test
 npm run build
+npm run test:vertical-slice
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -66,6 +71,19 @@ cargo build --release -p aacpipe-bridge
 
 The Publisher stub is a development integration surface, not the final Electron
 Publisher UI planned for Milestone 4.
+
+The complete encrypted vertical slice can be run with:
+
+```powershell
+npm run test:vertical-slice
+```
+
+It exercises compact pairing, persistent credential storage, challenge/proof
+authentication, AES-GCM state updates, clear-content semantics, reconnect
+synchronisation, and revocation credential deletion.
+
+Grid 3 cell ordering and command authoring are documented in
+[docs/grid3-test-cell-actions.md](./docs/grid3-test-cell-actions.md).
 
 ## Planned components
 
