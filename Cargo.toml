@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/bridge",
+    "crates/win32-native",
+]
+resolver = "2"

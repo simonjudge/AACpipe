@@ -1,0 +1,17 @@
+[package]
+name = "aacpipe-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "aacpipe-bridge"
+path = "src/main.rs"
+
+[dependencies]
+aacpipe-win32-native = { path = "../win32-native" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"

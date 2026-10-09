@@ -1,0 +1,13 @@
+{
+  "name": "@aacpipe/ipc-schema",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aacpipe/test-vectors": "0.1.0",
+    "zod": "^3.24.1"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@aacpipe/publisher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aacpipe/domain": "0.1.0",
+    "@aacpipe/ipc-schema": "0.1.0"
+  },
+  "exports": {
+    ".": "./src/main/index.ts"
+  }
+}

@@ -1,0 +1,487 @@
+{
+  "fixtureVersion": 1,
+  "validRequests": [
+    {
+      "name": "word",
+      "input": { "v": 1, "id": "req-word", "cmd": "word", "text": "water" }
+    },
+    {
+      "name": "word-and-speak",
+      "input": {
+        "v": 1,
+        "id": "req-word-speak",
+        "cmd": "word",
+        "text": "please",
+        "speak": true
+      }
+    },
+    {
+      "name": "sentence",
+      "input": {
+        "v": 1,
+        "id": "req-sentence",
+        "cmd": "sentence",
+        "text": "I would like some water."
+      }
+    },
+    {
+      "name": "sentence-and-speak",
+      "input": {
+        "v": 1,
+        "id": "req-sentence-speak",
+        "cmd": "sentence",
+        "text": "Hello",
+        "speak": true
+      }
+    },
+    {
+      "name": "clear",
+      "input": { "v": 1, "id": "req-clear", "cmd": "clear" }
+    },
+    {
+      "name": "clear-integral-json-number",
+      "input": { "v": 1.0, "id": "req-clear-number", "cmd": "clear" },
+      "expected": { "v": 1, "id": "req-clear-number", "cmd": "clear" }
+    },
+    {
+      "name": "speak",
+      "input": { "v": 1, "id": "req-speak", "cmd": "speak" }
+    },
+    {
+      "name": "pair-default-ephemeral",
+      "input": { "v": 1, "id": "req-pair-default", "cmd": "pair" },
+      "expected": {
+        "v": 1,
+        "id": "req-pair-default",
+        "cmd": "pair",
+        "channelType": "ephemeral"
+      }
+    },
+    {
+      "name": "pair-persistent-with-label",
+      "input": {
+        "v": 1,
+        "id": "req-pair-persistent",
+        "cmd": "pair",
+        "channelType": "persistent",
+        "label": "  Mum  "
+      },
+      "expected": {
+        "v": 1,
+        "id": "req-pair-persistent",
+        "cmd": "pair",
+        "channelType": "persistent",
+        "label": "Mum"
+      }
+    },
+    {
+      "name": "pair-label-at-utf8-limit",
+      "input": {
+        "v": 1,
+        "id": "req-label-limit",
+        "cmd": "pair",
+        "label": { "$repeat": "é", "count": 64 }
+      },
+      "expected": {
+        "v": 1,
+        "id": "req-label-limit",
+        "cmd": "pair",
+        "channelType": "ephemeral",
+        "label": { "$repeat": "é", "count": 64 }
+      }
+    },
+    {
+      "name": "revoke-channel",
+      "input": {
+        "v": 1,
+        "id": "req-revoke-one",
+        "cmd": "revoke",
+        "channelId": "x7K9pL3mN2qR8TvQa"
+      }
+    },
+    {
+      "name": "revoke-all",
+      "input": { "v": 1, "id": "req-revoke-all", "cmd": "revoke", "all": true }
+    },
+    {
+      "name": "status",
+      "input": { "v": 1, "id": "req-status", "cmd": "status" }
+    },
+    {
+      "name": "word-at-utf8-limit",
+      "input": {
+        "v": 1,
+        "id": "req-word-limit",
+        "cmd": "word",
+        "text": { "$repeat": "😀", "count": 64 }
+      }
+    },
+    {
+      "name": "sentence-at-utf8-limit",
+      "input": {
+        "v": 1,
+        "id": "req-sentence-limit",
+        "cmd": "sentence",
+        "text": { "$repeat": "😀", "count": 16384 }
+      }
+    }
+  ],
+  "invalidRequests": [
+    {
+      "name": "unsupported-version",
+      "input": { "v": 2, "id": "bad-version", "cmd": "clear" }
+    },
+    {
+      "name": "missing-request-id",
+      "input": { "v": 1, "cmd": "clear" }
+    },
+    {
+      "name": "empty-request-id",
+      "input": { "v": 1, "id": "", "cmd": "clear" }
+    },
+    {
+      "name": "request-id-over-limit",
+      "input": {
+        "v": 1,
+        "id": { "$repeat": "x", "count": 65 },
+        "cmd": "clear"
+      }
+    },
+    {
+      "name": "invalid-request-id",
+      "input": { "v": 1, "id": "bad id", "cmd": "clear" }
+    },
+    {
+      "name": "unknown-command",
+      "input": { "v": 1, "id": "bad-command", "cmd": "delete" }
+    },
+    {
+      "name": "word-missing-text",
+      "input": { "v": 1, "id": "bad-word-missing", "cmd": "word" }
+    },
+    {
+      "name": "word-over-utf8-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-word-limit",
+        "cmd": "word",
+        "text": { "$repeat": "😀", "count": 65 }
+      }
+    },
+    {
+      "name": "sentence-over-utf8-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-sentence-limit",
+        "cmd": "sentence",
+        "text": { "$repeat": "😀", "count": 16385 }
+      }
+    },
+    {
+      "name": "sentence-missing-text",
+      "input": { "v": 1, "id": "bad-sentence-missing", "cmd": "sentence" }
+    },
+    {
+      "name": "invalid-speak-modifier",
+      "input": {
+        "v": 1,
+        "id": "bad-speak-modifier",
+        "cmd": "word",
+        "text": "hello",
+        "speak": "yes"
+      }
+    },
+    {
+      "name": "invalid-channel-type",
+      "input": {
+        "v": 1,
+        "id": "bad-channel-type",
+        "cmd": "pair",
+        "channelType": "temporary"
+      }
+    },
+    {
+      "name": "empty-label",
+      "input": { "v": 1, "id": "bad-empty-label", "cmd": "pair", "label": "   " }
+    },
+    {
+      "name": "non-string-label",
+      "input": { "v": 1, "id": "bad-label-type", "cmd": "pair", "label": 123 }
+    },
+    {
+      "name": "label-over-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-label-limit",
+        "cmd": "pair",
+        "label": { "$repeat": "x", "count": 129 }
+      }
+    },
+    {
+      "name": "revoke-without-target",
+      "input": { "v": 1, "id": "bad-revoke-none", "cmd": "revoke" }
+    },
+    {
+      "name": "revoke-with-two-targets",
+      "input": {
+        "v": 1,
+        "id": "bad-revoke-both",
+        "cmd": "revoke",
+        "channelId": "x7K9pL3mN2qR8TvQa",
+        "all": true
+      }
+    },
+    {
+      "name": "revoke-invalid-channel-with-all",
+      "input": {
+        "v": 1,
+        "id": "bad-revoke-invalid-and-all",
+        "cmd": "revoke",
+        "channelId": "invalid",
+        "all": true
+      }
+    },
+    {
+      "name": "revoke-all-false",
+      "input": { "v": 1, "id": "bad-revoke-false", "cmd": "revoke", "all": false }
+    },
+    {
+      "name": "revoke-all-wrong-type",
+      "input": { "v": 1, "id": "bad-revoke-type", "cmd": "revoke", "all": "true" }
+    },
+    {
+      "name": "invalid-channel-id",
+      "input": {
+        "v": 1,
+        "id": "bad-channel-id",
+        "cmd": "revoke",
+        "channelId": "too-short"
+      }
+    },
+    {
+      "name": "non-ascii-label-over-byte-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-label-byte-limit",
+        "cmd": "pair",
+        "label": { "$repeat": "é", "count": 65 }
+      }
+    }
+  ],
+  "validResponses": [
+    {
+      "name": "success",
+      "input": {
+        "v": 1,
+        "id": "req-word",
+        "ok": true,
+        "state": "COMPOSING",
+        "revision": "12",
+        "channels": 1,
+        "subscribers": 1
+      }
+    },
+    {
+      "name": "failure",
+      "input": {
+        "v": 1,
+        "id": "req-word",
+        "ok": false,
+        "code": 3,
+        "error": "Clipboard is unavailable"
+      }
+    },
+    {
+      "name": "success-integral-json-numbers",
+      "input": {
+        "v": 1.0,
+        "id": "req-number-response",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": 1.0,
+        "subscribers": 0.0
+      },
+      "expected": {
+        "v": 1,
+        "id": "req-number-response",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": 1,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "non-ascii-error-at-byte-limit",
+      "input": {
+        "v": 1,
+        "id": "req-error-limit",
+        "ok": false,
+        "code": 1.0,
+        "error": { "$repeat": "é", "count": 128 }
+      },
+      "expected": {
+        "v": 1,
+        "id": "req-error-limit",
+        "ok": false,
+        "code": 1,
+        "error": { "$repeat": "é", "count": 128 }
+      }
+    }
+  ],
+  "invalidResponses": [
+    {
+      "name": "unsupported-response-version",
+      "input": {
+        "v": 2,
+        "id": "bad-response-version",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": 0,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "invalid-response-id",
+      "input": {
+        "v": 1,
+        "id": "bad response id",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": 0,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "revision-over-unsigned-64-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-revision-overflow",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "18446744073709551616",
+        "channels": 0,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "noncanonical-revision",
+      "input": {
+        "v": 1,
+        "id": "bad-revision",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "01",
+        "channels": 0,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "nonnumeric-revision",
+      "input": {
+        "v": 1,
+        "id": "bad-revision-text",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "one",
+        "channels": 0,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "negative-channel-count",
+      "input": {
+        "v": 1,
+        "id": "bad-channels",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": -1,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "channel-count-over-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-channel-count-high",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": 1025,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "fractional-subscriber-count",
+      "input": {
+        "v": 1,
+        "id": "bad-subscribers",
+        "ok": true,
+        "state": "IDLE",
+        "revision": "0",
+        "channels": 0,
+        "subscribers": 0.5
+      }
+    },
+    {
+      "name": "invalid-state",
+      "input": {
+        "v": 1,
+        "id": "bad-state",
+        "ok": true,
+        "state": "DISCONNECTED",
+        "revision": "0",
+        "channels": 0,
+        "subscribers": 0
+      }
+    },
+    {
+      "name": "zero-error-code",
+      "input": {
+        "v": 1,
+        "id": "bad-code",
+        "ok": false,
+        "code": 0,
+        "error": "Invalid"
+      }
+    },
+    {
+      "name": "error-code-over-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-code-high",
+        "ok": false,
+        "code": 256,
+        "error": "Invalid"
+      }
+    },
+    {
+      "name": "empty-error-message",
+      "input": { "v": 1, "id": "bad-error", "ok": false, "code": 1, "error": "" }
+    },
+    {
+      "name": "error-message-over-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-error-long",
+        "ok": false,
+        "code": 1,
+        "error": { "$repeat": "x", "count": 257 }
+      }
+    },
+    {
+      "name": "non-ascii-error-over-byte-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-error-byte-limit",
+        "ok": false,
+        "code": 1,
+        "error": { "$repeat": "é", "count": 129 }
+      }
+    }
+  ]
+}
