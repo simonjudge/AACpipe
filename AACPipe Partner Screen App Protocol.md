@@ -261,13 +261,14 @@ Exactly one content action (`--word`, `--sentence`, `--clear`) may be supplied p
 
 **Modifiers**
 
-| Modifier                          | Applies to             | Meaning                                                                                                                                                              |
-| :-------------------------------- | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--text "<string>"`               | `--word`, `--sentence` | Supplies text directly instead of reading the clipboard. Intended for testing and for AAC applications that can pass arguments. Takes precedence over the clipboard. |
-| `--persistent` / `--ephemeral`    | `--pair`               | Selects channel type. Defaults to `--ephemeral`.                                                                                                                     |
-| `--label "<name>"`                | `--pair`               | Sets the human-readable channel label shown in the Publisher UI.                                                                                                     |
-| `--channel <channelId>` / `--all` | `--revoke`             | Selects the channel to revoke. One is required.                                                                                                                      |
-| `--timeout <ms>`                  | all                    | Overrides the bridge's total deadline. Default 1500 ms.                                                                                                              |
+| Modifier                       | Applies to             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                       |
+| :----------------------------- | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--text "<string>"`            | `--word`, `--sentence` | Supplies text directly instead of reading the clipboard. Intended for testing and for AAC applications that can pass arguments. Takes precedence over the clipboard.                                                                                                                                                                                                                                          |
+| `--persistent` / `--ephemeral` | `--pair`               | Selects channel type. Defaults to `--ephemeral`.                                                                                                                                                                                                                                                                                                                                                              |
+| `--label "<name>"`             | `--pair`, `--revoke`   | With `--pair`, sets the channel label shown in the Publisher UI; labels are unique (case-insensitive) and a label is assigned automatically if omitted. With `--revoke`, selects the channel to revoke by label.                                                                                                                                                                                              |
+| `--all`                        | `--revoke`             | Revokes every channel. `--revoke` requires exactly one of `--label` or `--all`.                                                                                                                                                                                                                                                                                                                               |
+| `--show` / `--hide`            | all                    | Shows or hides the Publisher pairing window after the command (also accepted as `-show` / `-hide`). On its own, only shows or hides the window. `--word`, `--sentence`, `--clear` and `--speak` imply `--hide` unless `--show` is given, so the window never covers Grid 3; a cold start for a hidden command launches the Publisher with its window hidden. Sent over IPC as `"window": "show"` or `"hide"`. |
+| `--timeout <ms>`               | all                    | Overrides the bridge's total deadline. Default 1500 ms.                                                                                                                                                                                                                                                                                                                                                       |
 
 `--speak` sets SPEAKING for a configurable hold period (`speakHoldMs`, default 4000 ms), after which the Publisher reverts to COMPOSING, or to IDLE if the buffer is empty. Any subsequent content command also ends SPEAKING immediately. A dedicated `--speak-end` flag is reserved for a future release.
 
@@ -322,14 +323,14 @@ Example request and response:
 {"v":1,"id":"grid3-106","ok":true,"state":"COMPOSING","revision":"106","channels":1,"subscribers":1}
 ```
 
-The IPC schema is internal to the product and versioned by its own `v` field. It is deliberately separate from the wire protocol: changing the bridge does not change what Subscribers parse.
+The IPC schema is internal to the product and versioned by its own `v` field. It is deliberately separate from the wire protocol: changing the bridge does not change what Subscribers parse. Any request may carry an optional `"window": "show"` or `"window": "hide"` field asking the Publisher to show or hide its pairing window after the command; the bridge sends `"hide"` with content commands by default, and a bare `--show`/`--hide` is sent as a `status` request with that field.
 
 7.  ### **Publisher Auto-Start**
 
 If the bridge cannot connect because the pipe does not exist:
 
 1. It acquires a named single-start mutex so that several rapid invocations cannot launch competing Publishers.
-2. It starts the resident Publisher detached, with no visible window.
+2. It starts the resident Publisher detached, with no visible console; if the command will hide the pairing window (content commands, or `--hide`), the Publisher is started with `--hidden` so the window does not open over the AAC application.
 3. It waits for the pipe to appear, polling until its deadline expires.
 4. It then delivers the original command, so the triggering word or sentence is not lost.
 

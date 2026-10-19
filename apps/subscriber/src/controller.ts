@@ -12,7 +12,7 @@ import {
 } from '@aacpipe/protocol';
 
 export type SubscriberStatus =
-  'disconnected' | 'connecting' | 'authenticated' | 'revoked' | 'incompatible';
+  'disconnected' | 'connecting' | 'authenticated' | 'revoked' | 'incompatible' | 'forgotten';
 
 export interface SubscriberView {
   status: SubscriberStatus;
@@ -126,7 +126,7 @@ export class SubscriberController {
     truncated: false,
   };
   #store: PairingStore;
-  #transport?: SubscriberTransport;
+  #transport: SubscriberTransport | undefined;
   #fragment: PairingFragment | undefined;
   #keys: ReturnType<typeof deriveKeys> | undefined;
   #receiveSequence = 0n;
@@ -160,6 +160,7 @@ export class SubscriberController {
     this.#receiveSequence = 0n;
     this.#setView({ status: 'connecting', text: '', state: 'IDLE', truncated: false });
     transport.onMessage((value) => {
+      if (this.#transport !== transport) return;
       try {
         this.#handleMessage(value);
       } catch {
@@ -170,11 +171,19 @@ export class SubscriberController {
     });
     transport.onClose((code) => {
       this.#clearContent();
-      if (this.view.status === 'incompatible' || this.view.status === 'revoked') return;
+      if (
+        this.view.status === 'incompatible' ||
+        this.view.status === 'revoked' ||
+        this.view.status === 'forgotten'
+      ) {
+        this.#publish();
+        return;
+      }
       if (code === 4001) {
         void this.#revokeLocalCredential();
         this.#setView({ status: 'revoked', text: '', state: 'IDLE', truncated: false });
       } else {
+        if (this.#fragment?.flag === 'e') void this.#revokeLocalCredential();
         this.#setView({ status: 'disconnected', text: '', state: 'IDLE', truncated: false });
       }
     });
@@ -183,6 +192,19 @@ export class SubscriberController {
   clearLocalContent(): void {
     this.#clearContent();
     this.#publish();
+  }
+
+  /**
+   * Deletes this browser's copy of the pairing and disconnects. The Publisher
+   * channel is not revoked: the AAC user remains in control of it. Ephemeral
+   * channels end on the Publisher anyway when their connection closes.
+   */
+  async forget(): Promise<void> {
+    const transport = this.#transport;
+    this.#transport = undefined;
+    await this.#revokeLocalCredential();
+    this.#setView({ status: 'forgotten', text: '', state: 'IDLE', truncated: false });
+    transport?.close(1000);
   }
 
   async #revokeLocalCredential(): Promise<void> {

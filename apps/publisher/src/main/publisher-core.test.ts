@@ -77,4 +77,25 @@ describe('Publisher channel persistence', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('serialises concurrent writes from pairing and content fan-out', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'aacpipe-'));
+    const filePath = path.join(directory, 'channels.json');
+    try {
+      const core = await PublisherCore.create(filePath, testProtector);
+      await Promise.all([core.pair('persistent'), core.pair('persistent'), core.pair('ephemeral')]);
+      await core.applyAll({ kind: 'sentence', text: 'hello' });
+      await Promise.all([core.applyAll({ kind: 'clear' }), core.pair('persistent', 'Mum')]);
+
+      const restored = await PublisherCore.create(filePath, testProtector);
+      expect(
+        restored.registry
+          .list()
+          .map((channel) => channel.label)
+          .sort(),
+      ).toEqual(['Mum', 'Partner 1', 'Partner 2']);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

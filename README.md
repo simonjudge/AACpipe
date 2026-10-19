@@ -60,8 +60,8 @@ Publisher:
 npm run mvp
 ```
 
-The first launch creates a DPAPI-protected persistent Partner channel and
-prints:
+The first launch creates a DPAPI-protected persistent channel named `Partner 1`
+and prints:
 
 ```text
 AACpipe Publisher: partner screen listening on port 3210
@@ -92,17 +92,93 @@ Manage channels with:
 
 ```powershell
 .\target\release\aacpipe-bridge.exe --pair --persistent --label "Second partner"
-.\target\release\aacpipe-bridge.exe --revoke --channel <channel-id>
+.\target\release\aacpipe-bridge.exe --revoke --label "Second partner"
 .\target\release\aacpipe-bridge.exe --revoke --all
 ```
 
-Refresh the management page after a pair or revoke command. Pairing URLs contain
+Labels are unique, ignoring case. Pairing with a label that is already in use is
+refused; a persistent pairing without `--label` is named `Partner 1`,
+`Partner 2`, and so on, and one-time pairings are named `One-time 1`,
+`One-time 2`, and so on. The pairing window also has **New permanent pairing**
+(with a required partner name), **New one-time pairing**, and a **Revoke**
+button beside each pairing, which asks for confirmation first.
+
+The pairing window refreshes after pair or revoke commands. Pairing URLs contain
 secrets and should only be shared with the intended communication partner.
 Persistent metadata is stored under `%LOCALAPPDATA%\AACpipe`.
 
-The MVP requires the Publisher terminal to remain running. Electron tray
-packaging, bridge auto-start of the development Publisher, mDNS discovery, and
-installer creation remain later packaging work.
+Control the pairing window from the bridge with `--show` or `--hide` (single
+dash `-show`/`-hide` also works), either on their own or added to any command:
+
+```powershell
+.\target\release\aacpipe-bridge.exe --show
+.\target\release\aacpipe-bridge.exe --pair --persistent --label "Mum" --show
+.\target\release\aacpipe-bridge.exe --hide
+```
+
+`--word`, `--sentence`, `--clear` and `--speak` hide the window automatically
+(unless `--show` is added) so it never covers Grid 3, including when the bridge
+starts AACpipe.
+
+The development MVP requires its Publisher terminal to remain running. The
+Grid 3 test package runs the Publisher in Electron with a tray/window shell;
+mDNS discovery and a signed installer remain later work.
+
+## Build and install the Grid 3 test package
+
+The unsigned per-user Windows installer is built with:
+
+```powershell
+npm run package
+```
+
+Install the `AACpipe Setup 0.1.0.exe` artifact from `release`. The app starts
+with a tray icon and opens the pairing window. Closing that window hides the
+Publisher; use the tray menu to reopen it or quit. The Grid 3 bridge is installed
+beside `AACpipe.exe` and starts the Publisher automatically when a Grid action
+is invoked. For the first Grid session, launch AACpipe from the desktop shortcut
+before operating the grid and wait for the pairing window; a cold Electron launch
+can take several seconds. Configure Grid 3 to run:
+
+```text
+%LOCALAPPDATA%\Programs\AACpipe\aacpipe-bridge.exe
+```
+
+Use the action order in [the Grid 3 test-cell checklist](./docs/grid3-test-cell-actions.md).
+The pairing window displays QR codes for the available network interfaces;
+the AAC device and partner device must be on the same trusted network or AAC
+device hotspot. Allow the app on Private networks only if Windows Firewall
+prompts. This test build is unsigned, so Windows may show a publisher warning.
+
+### Partner page options
+
+The partner page has an **Options** button in its top bar. All options are off
+by default and are remembered only in that browser:
+
+- **Read spoken messages aloud** uses the phone's text-to-speech when the AAC
+  user speaks a message.
+- **Play an alert tone** beeps when a message is spoken.
+- **Keep the screen awake** uses the Wake Lock API where the browser allows it,
+  otherwise a silent looping video. The local page is plain HTTP, so most phones
+  use the video fallback; its effectiveness varies by phone.
+- **Forget** removes the pairing from this browser only. The AAC user must still
+  revoke the channel on the AAC device to remove it there.
+
+Phones only allow sound and screen-wake after a tap, so after a reload the page
+shows a "Tap here to turn on sound and keep the screen awake" banner. iPhones
+mute the alert tone when the silent switch is on.
+
+### One-time pairing
+
+Select **New one-time pairing** in the pairing window or tray menu, or run
+`aacpipe-bridge.exe --pair --ephemeral` from Grid 3; the pairing window pops up
+with a one-time QR code. The pairing is held in memory only and ends when the
+partner page disconnects or reloads, when its **Revoke** button is
+selected, or when AACpipe quits. The partner then sees "One-time pairing ended".
+
+Uninstalling this test build deletes AACpipe's pairing and configuration data
+under `%LOCALAPPDATA%\AACpipe`. Pair again after reinstalling. The installer is
+for local Grid 3 acceptance testing, not a signed or supported pilot release.
 
 ## Publisher stub
 
@@ -128,8 +204,8 @@ cargo build --release -p aacpipe-bridge
 .\target\release\aacpipe-bridge.exe --status
 ```
 
-The Publisher stub is a development integration surface, not the final Electron
-Publisher UI planned for Milestone 4.
+The Publisher stub is a development integration surface; the Grid 3 test package
+uses a minimal Electron tray/window shell around the existing Publisher.
 
 The complete encrypted vertical slice can be run with:
 
@@ -154,6 +230,30 @@ Grid 3 cell ordering and command authoring are documented in
 
 See [implementation_plan.md](./implementation_plan.md) for milestones, tasks,
 acceptance criteria, decisions, and the open-decision checklist.
+
+## Possible TODO: OCR-based Grid 3 monitoring
+
+- [ ] Investigate local OCR of Grid 3's writing area as an optional alternative
+      to the current clipboard-copy and run-program actions. Start with a
+      feasibility probe to measure recognition accuracy and latency during
+      typing, prediction selection, correction, clearing, and scrolling.
+
+On the tested setup, an elevated accessibility inspector can see Grid 3's window
+but exposes no writing-area text or child controls. No Grid API/hooks are
+available for this integration, and monitoring TTS would miss silent composition
+and edits while needing to accommodate both packaged voices and SAPI.
+
+The OCR probe should capture only a user-selected writing-area region, process
+images locally, and require stable recognition before sending authoritative
+composition snapshots through the existing Publisher. Keep the clipboard bridge
+available. Detect capture/recognition failures explicitly; an empty OCR result
+must not automatically clear the partner screen, and scrolling must not be
+mistaken for deletion.
+
+Exact word-completion detection remains an open question: OCR often discards
+trailing spaces, and a pause does not prove that a word is complete. Test whether
+Grid's visual spacing or caret behaviour provides a reliable completion cue;
+otherwise distinguish stable composition updates from confirmed word boundaries.
 
 ## Security scope
 

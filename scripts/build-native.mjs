@@ -5,9 +5,13 @@ import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cargo = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
+const release = process.argv.includes('--release');
+const profile = release ? 'release' : 'debug';
+const buildArguments = ['build', '-p', 'aacpipe-win32-native'];
+if (release) buildArguments.push('--release');
 
 await new Promise((resolve, reject) => {
-  const child = spawn(cargo, ['build', '-p', 'aacpipe-win32-native'], {
+  const child = spawn(cargo, buildArguments, {
     cwd: root,
     env: {
       ...process.env,
@@ -25,9 +29,11 @@ await new Promise((resolve, reject) => {
   });
 });
 
-const outputDirectory = path.join(root, 'apps', 'publisher', 'native');
+const outputDirectory = release
+  ? path.join(root, 'dist', 'apps', 'publisher', 'native')
+  : path.join(root, 'apps', 'publisher', 'native');
 await mkdir(outputDirectory, { recursive: true });
 await copyFile(
-  path.join(root, 'target', 'debug', 'aacpipe_win32_native.dll'),
+  path.join(root, 'target', profile, 'aacpipe_win32_native.dll'),
   path.join(outputDirectory, 'aacpipe_win32_native.node'),
 );

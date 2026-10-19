@@ -64,11 +64,24 @@ function defaultProtector(): SecretProtector {
   };
 }
 
+export class DuplicateLabelError extends Error {
+  constructor(label: string) {
+    super(`A pairing named "${label}" already exists`);
+    this.name = 'DuplicateLabelError';
+  }
+}
+
+// Labels identify channels for revocation, so comparison ignores case and Unicode composition.
+function labelKey(label: string): string {
+  return label.trim().normalize('NFC').toLocaleLowerCase('en-GB');
+}
+
 export class ChannelRegistry {
   #records = new Map<string, ChannelRecord>();
   #tombstones = new Set<string>();
   #filePath: string | undefined;
   #protector: SecretProtector;
+  #persistQueue: Promise<void> = Promise.resolve();
 
   private constructor(filePath: string | undefined, protector: SecretProtector) {
     this.#filePath = filePath;
@@ -114,13 +127,31 @@ export class ChannelRegistry {
     return this.#tombstones.has(channelId);
   }
 
+  findByLabel(label: string): ChannelRecord[] {
+    const key = labelKey(label);
+    return this.list().filter(
+      (record) => record.label !== undefined && labelKey(record.label) === key,
+    );
+  }
+
+  #nextLabel(channelType: 'persistent' | 'ephemeral'): string {
+    const prefix = channelType === 'persistent' ? 'Partner' : 'One-time';
+    for (let number = 1; ; number += 1) {
+      const candidate = `${prefix} ${String(number)}`;
+      if (this.findByLabel(candidate).length === 0) return candidate;
+    }
+  }
+
   async create(channelType: 'persistent' | 'ephemeral', label?: string): Promise<ChannelRecord> {
+    const trimmed = label?.trim();
+    const chosen = trimmed === undefined || trimmed === '' ? this.#nextLabel(channelType) : trimmed;
+    if (this.findByLabel(chosen).length > 0) throw new DuplicateLabelError(chosen);
     const channelId = randomChannelId((size) => randomBytes(size));
     const record: ChannelRecord = {
       channelId,
       channelType,
       secret: encodeBase64Url(randomBytes(32)),
-      ...(label === undefined ? {} : { label: label.trim() }),
+      label: chosen,
       revision: '0',
     };
     this.#records.set(channelId, record);
@@ -145,7 +176,14 @@ export class ChannelRegistry {
     await this.#persist();
   }
 
-  async #persist(): Promise<void> {
+  // Writes share one temporary file, so they must not overlap.
+  #persist(): Promise<void> {
+    const write = this.#persistQueue.then(() => this.#write());
+    this.#persistQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  async #write(): Promise<void> {
     if (this.#filePath === undefined) return;
     const directory = path.dirname(this.#filePath);
     await mkdir(directory, { recursive: true });

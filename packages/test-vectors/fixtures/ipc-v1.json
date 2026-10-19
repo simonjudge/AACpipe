@@ -91,12 +91,18 @@
       }
     },
     {
-      "name": "revoke-channel",
+      "name": "revoke-label",
       "input": {
         "v": 1,
         "id": "req-revoke-one",
         "cmd": "revoke",
-        "channelId": "x7K9pL3mN2qR8TvQa"
+        "label": "  Mum  "
+      },
+      "expected": {
+        "v": 1,
+        "id": "req-revoke-one",
+        "cmd": "revoke",
+        "label": "Mum"
       }
     },
     {
@@ -106,6 +112,25 @@
     {
       "name": "status",
       "input": { "v": 1, "id": "req-status", "cmd": "status" }
+    },
+    {
+      "name": "status-show-window",
+      "input": { "v": 1, "id": "req-show", "cmd": "status", "window": "show" }
+    },
+    {
+      "name": "sentence-hide-window",
+      "input": { "v": 1, "id": "req-hide", "cmd": "sentence", "text": "Hi", "window": "hide" }
+    },
+    {
+      "name": "pair-show-window",
+      "input": { "v": 1, "id": "req-pair-show", "cmd": "pair", "window": "show" },
+      "expected": {
+        "v": 1,
+        "id": "req-pair-show",
+        "cmd": "pair",
+        "channelType": "ephemeral",
+        "window": "show"
+      }
     },
     {
       "name": "word-at-utf8-limit",
@@ -154,6 +179,14 @@
     {
       "name": "unknown-command",
       "input": { "v": 1, "id": "bad-command", "cmd": "delete" }
+    },
+    {
+      "name": "invalid-window-value",
+      "input": { "v": 1, "id": "bad-window", "cmd": "status", "window": "minimise" }
+    },
+    {
+      "name": "non-string-window",
+      "input": { "v": 1, "id": "bad-window-type", "cmd": "clear", "window": true }
     },
     {
       "name": "word-missing-text",
@@ -227,17 +260,17 @@
         "v": 1,
         "id": "bad-revoke-both",
         "cmd": "revoke",
-        "channelId": "x7K9pL3mN2qR8TvQa",
+        "label": "Mum",
         "all": true
       }
     },
     {
-      "name": "revoke-invalid-channel-with-all",
+      "name": "revoke-blank-label-with-all",
       "input": {
         "v": 1,
         "id": "bad-revoke-invalid-and-all",
         "cmd": "revoke",
-        "channelId": "invalid",
+        "label": "   ",
         "all": true
       }
     },
@@ -250,12 +283,21 @@
       "input": { "v": 1, "id": "bad-revoke-type", "cmd": "revoke", "all": "true" }
     },
     {
-      "name": "invalid-channel-id",
+      "name": "revoke-blank-label",
       "input": {
         "v": 1,
-        "id": "bad-channel-id",
+        "id": "bad-revoke-blank-label",
         "cmd": "revoke",
-        "channelId": "too-short"
+        "label": "   "
+      }
+    },
+    {
+      "name": "revoke-label-over-byte-limit",
+      "input": {
+        "v": 1,
+        "id": "bad-revoke-long-label",
+        "cmd": "revoke",
+        "label": { "$repeat": "é", "count": 65 }
       }
     },
     {

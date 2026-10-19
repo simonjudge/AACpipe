@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 export const ipcVersion = 1 as const;
 
-const channelId = z.string().regex(/^[0-9A-Za-z]{17}$/u);
 const requestId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
 const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
 const maxUnsigned64 = 18_446_744_073_709_551_615n;
@@ -33,20 +32,21 @@ const errorMessage = z
 const baseRequest = z.object({
   v: z.literal(ipcVersion),
   id: requestId,
+  window: z.enum(['show', 'hide']).optional(),
 });
 
 const revokeRequestSchema = baseRequest
   .extend({
     cmd: z.literal('revoke'),
-    channelId: channelId.optional(),
+    label: label.optional(),
     all: z.boolean().optional(),
   })
   .superRefine((value, context) => {
-    if ((value.channelId === undefined) === (value.all !== true)) {
+    if ((value.label === undefined) === (value.all !== true)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Specify exactly one of channelId or all=true',
-        path: ['channelId'],
+        message: 'Specify exactly one of label or all=true',
+        path: ['label'],
       });
     }
   });

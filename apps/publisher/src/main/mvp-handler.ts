@@ -6,11 +6,12 @@ import {
   type IpcResponse,
 } from '@aacpipe/ipc-schema';
 
-import type { PublisherCore } from './publisher.js';
+import { DuplicateLabelError, type PublisherCore } from './publisher.js';
 
 export interface MvpRequestHandler {
   processPayload(payload: string): Promise<IpcResponse>;
   finishSpeaking(): Promise<void>;
+  pair(channelType: 'persistent' | 'ephemeral', label?: string): Promise<void>;
 }
 
 export function createMvpRequestHandler(core: PublisherCore): MvpRequestHandler {
@@ -68,6 +69,18 @@ export function createMvpRequestHandler(core: PublisherCore): MvpRequestHandler 
     }
   }
 
+  async function pair(channelType: 'persistent' | 'ephemeral', label?: string): Promise<void> {
+    const channel = await core.pair(channelType, label);
+    const snapshot = store.snapshot();
+    if (snapshot.text !== '') {
+      await core.apply(channel.channelId, {
+        kind: 'sentence',
+        text: snapshot.text,
+        speak: snapshot.state === 'SPEAKING',
+      });
+    }
+  }
+
   async function handle(request: IpcRequest): Promise<IpcResponse> {
     const command = contentCommand(request);
     if (command !== undefined) {
@@ -78,27 +91,29 @@ export function createMvpRequestHandler(core: PublisherCore): MvpRequestHandler 
 
     switch (request.cmd) {
       case 'pair': {
-        const channel = await core.pair(request.channelType, request.label);
-        const snapshot = store.snapshot();
-        if (snapshot.text !== '') {
-          await core.apply(channel.channelId, {
-            kind: 'sentence',
-            text: snapshot.text,
-            speak: snapshot.state === 'SPEAKING',
-          });
+        try {
+          await pair(request.channelType, request.label);
+        } catch (error) {
+          if (error instanceof DuplicateLabelError) {
+            return failure(request.id, 6, 'Label already in use');
+          }
+          throw error;
         }
         return success(request.id);
       }
-      case 'revoke':
+      case 'revoke': {
         if (request.all === true) {
           await core.revokeAll();
           return success(request.id);
         }
-        if (request.channelId !== undefined && core.registry.get(request.channelId) !== undefined) {
-          await core.revoke(request.channelId);
-          return success(request.id);
-        }
-        return failure(request.id, 6, 'Unknown channel');
+        const matches = request.label === undefined ? [] : core.registry.findByLabel(request.label);
+        if (matches.length > 1)
+          return failure(request.id, 6, 'Label matches more than one channel');
+        const [match] = matches;
+        if (match === undefined) return failure(request.id, 6, 'Unknown channel label');
+        await core.revoke(match.channelId);
+        return success(request.id);
+      }
       case 'status':
         return success(request.id);
     }
@@ -119,6 +134,8 @@ export function createMvpRequestHandler(core: PublisherCore): MvpRequestHandler 
   }
 
   return {
+    pair,
+
     async processPayload(payload): Promise<IpcResponse> {
       let decoded: unknown;
       try {

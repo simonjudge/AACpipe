@@ -68,7 +68,7 @@ describe('Publisher request handler', () => {
         v: 1,
         id: 'unknown',
         cmd: 'revoke',
-        channelId: '00000000000000001',
+        label: 'Nobody',
       }),
     ).toMatchObject({ id: 'unknown', ok: false, code: 6 });
   });

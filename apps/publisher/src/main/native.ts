@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 export interface NativePipeRequest {
   readonly connectionId: number;
@@ -59,11 +59,12 @@ interface NativeModule {
   unprotectData(protectedData: Buffer): Buffer;
 }
 
-const require = createRequire(import.meta.url);
+const require = createRequire(path.join(process.cwd(), 'package.json'));
 
 export function loadNativeModule(): NativeModule {
   const override = process.env['AACPIPE_NATIVE_MODULE'];
   const modulePath =
-    override ?? fileURLToPath(new URL('../../native/aacpipe_win32_native.node', import.meta.url));
+    override ??
+    path.join(process.cwd(), 'apps', 'publisher', 'native', 'aacpipe_win32_native.node');
   return require(modulePath) as NativeModule;
 }

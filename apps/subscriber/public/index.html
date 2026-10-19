@@ -11,13 +11,57 @@
     <header>
       <span id="channel-label"></span>
       <span id="status" role="status" aria-live="polite">Starting...</span>
+      <button id="options-button" type="button" aria-haspopup="dialog">Options</button>
     </header>
+    <button id="activate-button" class="activate" type="button" hidden>
+      Tap here to turn on sound and keep the screen awake
+    </button>
     <main>
       <p id="message" aria-label="AAC message"></p>
       <p id="storage-warning" class="warning" hidden>
         This browser cannot save the pairing. Keep this tab open or scan the QR code again.
       </p>
     </main>
+    <dialog id="options-dialog" aria-labelledby="options-title">
+      <form method="dialog">
+        <h2 id="options-title">Options</h2>
+        <label>
+          <input id="option-speak" type="checkbox" />
+          Read messages aloud when they are spoken
+        </label>
+        <p id="speak-unavailable" class="note" hidden>
+          This browser does not support reading aloud.
+        </p>
+        <label>
+          <input id="option-tone" type="checkbox" />
+          Play an alert tone when a message is spoken
+        </label>
+        <label>
+          <input id="option-awake" type="checkbox" />
+          Keep the screen awake
+        </label>
+        <p class="note">Turn your phone's sound on to hear spoken messages and alert tones.</p>
+        <hr />
+        <h3>Forget</h3>
+        <p class="note">
+          Remove this pairing from this phone. You will need to scan a new QR code to reconnect. The
+          AAC user can also end the pairing on their device.
+        </p>
+        <button id="forget-button" type="button" class="danger">Forget</button>
+        <div class="dialog-actions">
+          <button value="close">Close</button>
+        </div>
+      </form>
+    </dialog>
+    <video
+      id="keep-awake-video"
+      src="/keep-awake.mp4"
+      playsinline
+      loop
+      preload="auto"
+      aria-hidden="true"
+      tabindex="-1"
+    ></video>
     <script type="module" src="/subscriber.js"></script>
   </body>
 </html>

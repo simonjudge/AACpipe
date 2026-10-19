@@ -1,9 +1,11 @@
 # AACpipe Implementation Plan
 
-**Plan status:** Runnable local-network MVP complete; Electron packaging, mDNS, and physical-device acceptance remain  
-**Target release:** v0.1 Windows / Grid 3  
-**Last updated:** 2026-10-09  
+**Plan status:** Runnable local-network MVP and unsigned Grid 3 test package complete; paused pending the physical Grid 3 trial. mDNS and pilot-release work remain.<br>
+**Target release:** v0.1 Windows / Grid 3<br>
+**Last updated:** 2026-10-17<br>
 **Protocol source:** [AACPipe Partner Screen App Protocol.md](./AACPipe%20Partner%20Screen%20App%20Protocol.md)
+
+**Current gate:** Do not begin further product work until the test package has been tried with Grid 3 and the results reviewed.
 
 This is the working delivery plan for AACpipe. Update it throughout development:
 
@@ -477,7 +479,8 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 - [x] Verify clear immediately removes text and does not revoke pairing.
 - [x] Verify Publisher auto-start preserves the triggering command.
 - [x] Verify persistent pairing through Publisher restart and browser refresh; Windows reboot remains a physical acceptance check.
-- [ ] Verify ephemeral pairing ends on disconnect.
+- [ ] Verify ephemeral pairing ends on disconnect. One-time pairing is implemented (window, tray, and `--pair --ephemeral`; ends on authenticated disconnect, manual end, or quit) with unit coverage; physical-phone verification remains.
+- [ ] Verify partner-page Options (speak aloud, alert tone, keep screen awake, local Forget) on physical Android Chrome and iOS Safari.
 - [ ] Verify home Wi-Fi and Windows hotspot workflows.
 - [ ] Verify mDNS and document direct-IP ephemeral fallback.
 - [ ] Test Android Chrome and iOS Safari on physical devices.
@@ -525,8 +528,9 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 
 ### Tasks
 
-- [ ] Build per-user NSIS installer with Publisher, bridge, native addon, and embedded SPA.
-- [ ] Register Publisher startup behavior and clean uninstall behavior.
+- [x] Build unsigned per-user NSIS test installer with Publisher, bridge, native addon, and embedded SPA.
+- [x] Package bridge-triggered Publisher auto-start and configure uninstall to delete pairing data.
+- [ ] Verify clean installation and pairing-data deletion on uninstall.
 - [ ] Add Windows Firewall guidance or installer rule only if required and narrowly scoped.
 - [ ] Sign installer and executables.
 - [ ] Add first-run explanation of LOCAL security limitations.
@@ -613,25 +617,29 @@ During development, prefer targeted workspace commands before the full suite.
 
 ## 9. Decision Log
 
-| Date       | Decision                                                                                                             | Reason                                                                                                               | Status                |
-| ---------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| 2026-10-08 | v0.1 prioritizes zero-install LOCAL mode over active-local-attacker protection.                                      | Lowest-friction first implementation; limitations are explicit.                                                      | Accepted              |
-| 2026-10-08 | Use the AAC device hotspot away from trusted home networks.                                                          | Avoid arbitrary public Wi-Fi and AP isolation.                                                                       | Accepted              |
-| 2026-10-08 | Persistent pairing survives reload/restart until revocation, while message content never persists in the Subscriber. | Convenience without retaining conversation content.                                                                  | Accepted              |
-| 2026-10-08 | v0.1 is one partner per channel and content-read-only.                                                               | Reduce first-release scope while preserving extension points.                                                        | Accepted              |
-| 2026-10-08 | Subscriber clears content on any unexpected connection loss.                                                         | Privacy-first display behavior.                                                                                      | Accepted              |
-| 2026-10-08 | Grid 3 invokes a flag-driven bridge using clipboard text.                                                            | Avoid UI scraping and product-specific APIs.                                                                         | Accepted              |
-| 2026-10-08 | `--word` is append-only; drift is accepted until `--sentence` or `--clear`.                                          | Simple and low latency.                                                                                              | Accepted              |
-| 2026-10-08 | Bridge silently auto-starts the resident Publisher and delivers the original command.                                | No manual recovery after reboot.                                                                                     | Accepted              |
-| 2026-10-08 | Use TypeScript/Node.js for Publisher and browser, Rust for the native bridge.                                        | Balance shared web development with predictable native startup.                                                      | Accepted              |
-| 2026-10-08 | Use Electron for the resident Publisher shell.                                                                       | Provides Windows tray, windows, autostart, and Node hosting in one supported package.                                | Proposed; validate M0 |
-| 2026-10-08 | Use a Rust Node-API addon for secure pipes and DPAPI.                                                                | Node alone cannot guarantee the required Windows primitives.                                                         | Proposed; validate M0 |
-| 2026-10-08 | Milestone 1 uses inert TypeScript/Rust entry points and defers runtime dependencies.                                 | Establish reproducible workspace/tooling boundaries before protocol implementation.                                  | Accepted              |
-| 2026-10-09 | Use audited Noble synchronous primitives for shared browser/Node protocol cryptography.                              | LOCAL HTTP origins cannot rely on secure-context Web Crypto, while the protocol still requires browser-side AES-GCM. | Accepted              |
+| Date       | Decision                                                                                                                                                                                   | Reason                                                                                                               | Status                |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| 2026-10-08 | v0.1 prioritizes zero-install LOCAL mode over active-local-attacker protection.                                                                                                            | Lowest-friction first implementation; limitations are explicit.                                                      | Accepted              |
+| 2026-10-08 | Use the AAC device hotspot away from trusted home networks.                                                                                                                                | Avoid arbitrary public Wi-Fi and AP isolation.                                                                       | Accepted              |
+| 2026-10-08 | Persistent pairing survives reload/restart until revocation, while message content never persists in the Subscriber.                                                                       | Convenience without retaining conversation content.                                                                  | Accepted              |
+| 2026-10-08 | v0.1 is one partner per channel and content-read-only.                                                                                                                                     | Reduce first-release scope while preserving extension points.                                                        | Accepted              |
+| 2026-10-08 | Subscriber clears content on any unexpected connection loss.                                                                                                                               | Privacy-first display behavior.                                                                                      | Accepted              |
+| 2026-10-08 | Grid 3 invokes a flag-driven bridge using clipboard text.                                                                                                                                  | Avoid UI scraping and product-specific APIs.                                                                         | Accepted              |
+| 2026-10-08 | `--word` is append-only; drift is accepted until `--sentence` or `--clear`.                                                                                                                | Simple and low latency.                                                                                              | Accepted              |
+| 2026-10-08 | Bridge silently auto-starts the resident Publisher and delivers the original command.                                                                                                      | No manual recovery after reboot.                                                                                     | Accepted              |
+| 2026-10-08 | Use TypeScript/Node.js for Publisher and browser, Rust for the native bridge.                                                                                                              | Balance shared web development with predictable native startup.                                                      | Accepted              |
+| 2026-10-08 | Use Electron for the resident Publisher shell.                                                                                                                                             | Provides Windows tray, windows, autostart, and Node hosting in one supported package.                                | Proposed; validate M0 |
+| 2026-10-08 | Use a Rust Node-API addon for secure pipes and DPAPI.                                                                                                                                      | Node alone cannot guarantee the required Windows primitives.                                                         | Proposed; validate M0 |
+| 2026-10-08 | Milestone 1 uses inert TypeScript/Rust entry points and defers runtime dependencies.                                                                                                       | Establish reproducible workspace/tooling boundaries before protocol implementation.                                  | Accepted              |
+| 2026-10-09 | Use audited Noble synchronous primitives for shared browser/Node protocol cryptography.                                                                                                    | LOCAL HTTP origins cannot rely on secure-context Web Crypto, while the protocol still requires browser-side AES-GCM. | Accepted              |
+| 2026-10-17 | Use an unsigned per-user NSIS installer with an Electron tray/window shell; delete `%LOCALAPPDATA%\AACpipe` data on uninstall.                                                             | Package a local Grid 3 test build; defer signing and broader release work until after physical testing.              | Accepted              |
+| 2026-10-19 | Partner-page Forget is local-only; one-time pairing can start from the AACpipe window/tray or a Grid cell.                                                                                 | Keep the Subscriber receive-only per protocol; the AAC user stays in control of revocation.                          | Accepted              |
+| 2026-10-19 | Channel labels are unique (case-insensitive) and replace channel IDs for bridge revocation; window-created permanent pairings require a label, bridge pairings without one are auto-named. | Grid cells and AAC users can name partners instead of copying random IDs.                                            | Accepted              |
+| 2026-10-19 | Content bridge commands hide the pairing window by default; any command can carry `--show`/`--hide` (optional IPC `window` field), and either flag alone only shows/hides the window.      | Stop the AACpipe window covering Grid 3 while letting pairing cells bring it forward.                                | Accepted              |
 
 ## 10. Open Decisions
 
-- [ ] Final executable names and Grid 3 command paths.
+- [x] Final executable names and Grid 3 command paths.
 - [ ] Minimum supported Windows and Grid 3 versions.
 - [ ] Minimum supported Android Chrome and iOS Safari versions.
 - [ ] Exact mDNS package after maintenance and interoperability review.
@@ -645,12 +653,16 @@ During development, prefer targeted workspace commands before the full suite.
 
 ## 11. Change Log
 
-| Date       | Change                                                                                                                                                                            |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-10-08 | Initial implementation plan created from protocol v0.1 and agreed Grid 3 command-bridge approach.                                                                                 |
-| 2026-10-08 | Completed local Milestone 1 validation after installing Rust stable 1.99.0 with rustfmt and clippy; generated Cargo.lock and cleared the Rust validation block.                   |
-| 2026-10-08 | Added Windows PowerShell guidance for refreshing the user-local Cargo path after Rustup installation.                                                                             |
-| 2026-10-08 | Completed Milestone 2 domain behavior, configuration defaults, and normalized TypeScript/Rust IPC contract fixtures; full validation passed.                                      |
-| 2026-10-08 | Implemented the Milestone 3 bridge, native addon, secure pipe, Publisher stub, auto-start/lifetime locks, stress harness, and local performance validation.                       |
-| 2026-10-09 | Completed Milestone 3 adversarial clipboard coverage and kernel-level DACL/remote-pipe verification; all tasks and exit criteria now pass locally.                                |
-| 2026-10-09 | Delivered the runnable local-network MVP with QR pairing, encrypted WebSocket delivery, persistent browser reconnect, live revocation, and real-browser/native-bridge validation. |
+| Date       | Change                                                                                                                                                                                                                        |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-08 | Initial implementation plan created from protocol v0.1 and agreed Grid 3 command-bridge approach.                                                                                                                             |
+| 2026-10-08 | Completed local Milestone 1 validation after installing Rust stable 1.99.0 with rustfmt and clippy; generated Cargo.lock and cleared the Rust validation block.                                                               |
+| 2026-10-08 | Added Windows PowerShell guidance for refreshing the user-local Cargo path after Rustup installation.                                                                                                                         |
+| 2026-10-08 | Completed Milestone 2 domain behavior, configuration defaults, and normalized TypeScript/Rust IPC contract fixtures; full validation passed.                                                                                  |
+| 2026-10-08 | Implemented the Milestone 3 bridge, native addon, secure pipe, Publisher stub, auto-start/lifetime locks, stress harness, and local performance validation.                                                                   |
+| 2026-10-09 | Completed Milestone 3 adversarial clipboard coverage and kernel-level DACL/remote-pipe verification; all tasks and exit criteria now pass locally.                                                                            |
+| 2026-10-09 | Delivered the runnable local-network MVP with QR pairing, encrypted WebSocket delivery, persistent browser reconnect, live revocation, and real-browser/native-bridge validation.                                             |
+| 2026-10-17 | Packaged and smoke-tested the unsigned per-user Grid 3 test installer; paused further product work for physical Grid 3 feedback.                                                                                              |
+| 2026-10-19 | Added partner-page Options (speak aloud, alert tone, keep screen awake, local-only Forget) and one-time pairing from the window, tray, and Grid bridge; rebuilt the test installer.                                           |
+| 2026-10-19 | Channel labels became unique identifiers: `--revoke --label` replaced `--revoke --channel`, unlabelled pairings are auto-named, and the pairing window gained New permanent pairing and confirmed per-pairing Revoke buttons. |
+| 2026-10-19 | Added bridge `--show`/`--hide` window control; word, sentence, speak and clear hide the pairing window (including on cold start) so it no longer covers Grid 3.                                                               |

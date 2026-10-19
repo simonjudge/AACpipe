@@ -72,7 +72,10 @@ export function createPublisherRequestHandler(): PublisherRequestHandler {
         return applyContent(request);
       case 'pair': {
         channelSequence += 1;
-        channels.add(channelSequence.toString(36).padStart(17, '0'));
+        const label = request.label ?? `Partner ${String(channelSequence)}`;
+        const key = label.toLocaleLowerCase('en-GB');
+        if (channels.has(key)) return failure(request.id, 6, 'Label already in use');
+        channels.add(key);
         return success(request.id);
       }
       case 'revoke': {
@@ -80,10 +83,13 @@ export function createPublisherRequestHandler(): PublisherRequestHandler {
           channels.clear();
           return success(request.id);
         }
-        if (request.channelId !== undefined && channels.delete(request.channelId)) {
+        if (
+          request.label !== undefined &&
+          channels.delete(request.label.toLocaleLowerCase('en-GB'))
+        ) {
           return success(request.id);
         }
-        return failure(request.id, 6, 'Unknown channel');
+        return failure(request.id, 6, 'Unknown channel label');
       }
       case 'status':
         return success(request.id);

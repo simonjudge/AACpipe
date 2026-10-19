@@ -12,14 +12,15 @@
 body {
   min-height: 100vh;
   margin: 0;
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   background: #fff;
   color: #111;
 }
 
 header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
@@ -28,8 +29,99 @@ header {
   font-size: clamp(1rem, 2vw, 1.4rem);
 }
 
+#status {
+  margin-left: auto;
+}
+
+header button {
+  padding: 0.35em 0.8em;
+  border: 2px solid currentcolor;
+  border-radius: 0.4em;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.activate {
+  padding: 0.9rem 1rem;
+  border: 0;
+  background: #005fcc;
+  color: #fff;
+  font: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+dialog {
+  width: min(32rem, calc(100vw - 2rem));
+  padding: 1.25rem 1.5rem;
+  border: 2px solid currentcolor;
+  border-radius: 0.6rem;
+  background: #fff;
+  color: #111;
+  font-size: 1.1rem;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+
+dialog h2,
+dialog h3 {
+  margin: 0 0 0.75rem;
+}
+
+dialog label {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin: 0.9rem 0;
+}
+
+dialog input[type='checkbox'] {
+  width: 1.4rem;
+  height: 1.4rem;
+  flex: none;
+}
+
+dialog button {
+  min-height: 2.75rem;
+  padding: 0.5rem 1.2rem;
+  font: inherit;
+}
+
+.note {
+  margin: 0.4rem 0;
+  font-size: 0.95rem;
+  opacity: 0.85;
+}
+
+.danger {
+  border: 2px solid #b00020;
+  background: #b00020;
+  color: #fff;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+#keep-awake-video {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
 main {
   display: grid;
+  flex: 1;
   place-items: center;
   padding: clamp(1rem, 5vw, 4rem);
 }
@@ -74,5 +166,10 @@ body[data-connection-state='connecting'] #message {
   header {
     background: #eee;
     color: #111;
+  }
+
+  dialog {
+    background: #1a1a1a;
+    color: #fff;
   }
 }

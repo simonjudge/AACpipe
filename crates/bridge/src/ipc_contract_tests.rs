@@ -50,10 +50,11 @@ fn valid_request_id(value: Option<&Value>) -> bool {
     })
 }
 
-fn valid_channel_id(value: Option<&Value>) -> bool {
-    value
-        .and_then(Value::as_str)
-        .is_some_and(|id| id.len() == 17 && id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+fn valid_label(value: &Value) -> bool {
+    value.as_str().is_some_and(|label| {
+        let trimmed = label.trim();
+        !trimmed.is_empty() && trimmed.len() <= 128
+    })
 }
 
 fn optional_boolean(value: Option<&Value>) -> bool {
@@ -84,6 +85,12 @@ fn valid_request(value: &Value) -> bool {
     if integer_u64(request.get("v")) != Some(1) || !valid_request_id(request.get("id")) {
         return false;
     }
+    if !request
+        .get("window")
+        .is_none_or(|window| matches!(window.as_str(), Some("show" | "hide")))
+    {
+        return false;
+    }
 
     match request.get("cmd").and_then(Value::as_str) {
         Some("word") => {
@@ -104,18 +111,12 @@ fn valid_request(value: &Value) -> bool {
         Some("pair") => {
             request.get("channelType").is_none_or(|channel_type| {
                 matches!(channel_type.as_str(), Some("persistent" | "ephemeral"))
-            }) && request.get("label").is_none_or(|label| {
-                label.as_str().is_some_and(|label| {
-                    let trimmed = label.trim();
-                    !trimmed.is_empty() && trimmed.len() <= 128
-                })
-            })
+            }) && request.get("label").is_none_or(valid_label)
         }
         Some("revoke") => {
-            let channel_present = request.contains_key("channelId");
+            let label_present = request.contains_key("label");
             let all = request.get("all").and_then(Value::as_bool) == Some(true);
-            (channel_present ^ all)
-                && (!channel_present || valid_channel_id(request.get("channelId")))
+            (label_present ^ all) && request.get("label").is_none_or(valid_label)
         }
         _ => false,
     }
@@ -201,9 +202,9 @@ fn normalize_request(value: &Value) -> Option<Value> {
         normalized
             .entry("channelType")
             .or_insert_with(|| Value::String("ephemeral".to_owned()));
-        if let Some(Value::String(label)) = normalized.get_mut("label") {
-            *label = label.trim().to_owned();
-        }
+    }
+    if let Some(Value::String(label)) = normalized.get_mut("label") {
+        *label = label.trim().to_owned();
     }
     Some(Value::Object(normalized))
 }

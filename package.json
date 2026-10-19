@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "dist/apps/publisher/src/main/electron-main.cjs",
   "description": "AACpipe local partner screen application",
   "engines": {
     "node": ">=22.0.0"
@@ -16,7 +17,8 @@
     "native:build": "node scripts/build-native.mjs",
     "subscriber:build": "node scripts/build-subscriber.mjs",
     "premvp": "npm run native:build && npm run subscriber:build",
-    "mvp": "tsx apps/publisher/src/main/mvp.ts",
+    "mvp": "tsx apps/publisher/src/main/mvp-dev.ts",
+    "publisher:bundle": "node scripts/build-publisher.mjs",
     "prepublisher:stub": "npm run native:build",
     "publisher:stub": "tsx apps/publisher/src/main/stub.ts",
     "clean": "node scripts/clean.mjs",
@@ -28,7 +30,7 @@
     "test:watch": "vitest",
     "test:vertical-slice": "vitest run apps/publisher/src/main/vertical-slice.test.ts",
     "test:e2e": "npm run test:vertical-slice",
-    "package": "echo \"Packaging is not implemented until Milestone 9\"",
+    "package": "npm run build && npm run subscriber:build && npm run native:build -- --release && node scripts/build-bridge.mjs && npm run publisher:bundle && electron-builder --win nsis",
     "rust:fmt": "cargo fmt --all --check",
     "rust:clippy": "cargo clippy --workspace --all-targets -- -D warnings",
     "rust:test": "cargo test --workspace"
@@ -37,14 +39,54 @@
     "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
     "fast-check": "^4.10.2",
     "prettier": "^3.4.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
-    "tsx": "^4.20.6",
     "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "org.aacpipe.publisher",
+    "productName": "AACpipe",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/apps/publisher/src/main/electron-main.cjs",
+      "dist/apps/publisher/native/aacpipe_win32_native.node",
+      "apps/subscriber/public/**/*",
+      "apps/subscriber/dist/subscriber.js",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "dist/apps/publisher/native/**"
+    ],
+    "extraFiles": [
+      {
+        "from": "target/release/aacpipe-bridge.exe",
+        "to": "aacpipe-bridge.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AACpipe",
+      "include": "build/installer.nsh"
+    }
   }
 }

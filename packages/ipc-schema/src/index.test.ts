@@ -31,9 +31,9 @@ describe('IPC request schema', () => {
         v: 1,
         id: 'request-3',
         cmd: 'revoke',
-        channelId: 'x7K9pL3mN2qR8TvQa',
+        label: '  Mum  ',
       }),
-    ).toMatchObject({ cmd: 'revoke', channelId: 'x7K9pL3mN2qR8TvQa' });
+    ).toMatchObject({ cmd: 'revoke', label: 'Mum' });
 
     expect(
       parseIpcRequest({
@@ -56,7 +56,7 @@ describe('IPC request schema', () => {
         v: 1,
         id: 'request-6',
         cmd: 'revoke',
-        channelId: 'x7K9pL3mN2qR8TvQa',
+        label: 'Mum',
         all: true,
       }),
     ).toThrow();

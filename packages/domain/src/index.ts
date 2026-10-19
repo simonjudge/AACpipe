@@ -17,7 +17,7 @@ export type ManagementCommand =
       readonly channelType: 'persistent' | 'ephemeral';
       readonly label?: string;
     }
-  | { readonly kind: 'revoke'; readonly channelId?: string; readonly all?: boolean }
+  | { readonly kind: 'revoke'; readonly label?: string; readonly all?: boolean }
   | { readonly kind: 'status' };
 
 export type DomainCommand = ContentCommand | ManagementCommand;

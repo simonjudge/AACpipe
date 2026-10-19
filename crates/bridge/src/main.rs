@@ -21,6 +21,7 @@ const EXIT_PUBLISHER: i32 = 4;
 const EXIT_PAYLOAD: i32 = 5;
 const EXIT_REFUSED: i32 = 6;
 const DEFAULT_TIMEOUT_MS: u32 = 1500;
+const PUBLISHER_STARTUP_TIMEOUT_MS: u32 = 30_000;
 const INITIAL_PIPE_PROBE_MS: u32 = 50;
 const MAX_WORD_BYTES: usize = 256;
 const MAX_SENTENCE_BYTES: usize = 64 * 1024;
@@ -53,9 +54,11 @@ struct Cli {
     #[arg(long)]
     label: Option<String>,
     #[arg(long)]
-    channel: Option<String>,
-    #[arg(long)]
     all: bool,
+    #[arg(long, conflicts_with = "hide")]
+    show: bool,
+    #[arg(long)]
+    hide: bool,
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_MS, value_parser = clap::value_parser!(u32).range(100..=30_000))]
     timeout: u32,
 }
@@ -69,6 +72,22 @@ enum Action {
     Pair { persistent: bool },
     Revoke,
     Status,
+    Window,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WindowRequest {
+    Show,
+    Hide,
+}
+
+impl WindowRequest {
+    fn as_str(self) -> &'static str {
+        match self {
+            WindowRequest::Show => "show",
+            WindowRequest::Hide => "hide",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -76,8 +95,8 @@ struct ValidatedCli {
     action: Action,
     text: Option<String>,
     label: Option<String>,
-    channel: Option<String>,
     all: bool,
+    window: Option<WindowRequest>,
     timeout_ms: u32,
 }
 
@@ -94,10 +113,10 @@ struct Request {
     channel_type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
-    #[serde(rename = "channelId", skip_serializing_if = "Option::is_none")]
-    channel_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     all: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<&'static str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,10 +147,18 @@ fn validate_cli(cli: Cli) -> Result<ValidatedCli, String> {
         usize::from(cli.pair) + usize::from(cli.revoke) + usize::from(cli.status);
     let speak_only = cli.speak && content_actions == 0 && management_actions == 0;
     let action_count = content_actions + management_actions + usize::from(speak_only);
+    let explicit_window = if cli.show {
+        Some(WindowRequest::Show)
+    } else if cli.hide {
+        Some(WindowRequest::Hide)
+    } else {
+        None
+    };
+    let window_only = action_count == 0 && explicit_window.is_some();
 
-    if action_count != 1 {
+    if action_count != 1 && !window_only {
         return Err(
-            "specify exactly one action; --speak may only accompany --word or --sentence"
+            "specify exactly one action (or only --show/--hide); --speak may only accompany --word or --sentence"
                 .to_owned(),
         );
     }
@@ -144,22 +171,20 @@ fn validate_cli(cli: Cli) -> Result<ValidatedCli, String> {
     if cli.text.is_some() && !cli.word && !cli.sentence {
         return Err("--text requires --word or --sentence".to_owned());
     }
-    if (cli.persistent || cli.ephemeral || cli.label.is_some()) && !cli.pair {
-        return Err("--persistent, --ephemeral and --label require --pair".to_owned());
+    if (cli.persistent || cli.ephemeral) && !cli.pair {
+        return Err("--persistent and --ephemeral require --pair".to_owned());
+    }
+    if cli.label.is_some() && !cli.pair && !cli.revoke {
+        return Err("--label requires --pair or --revoke".to_owned());
     }
     if cli.persistent && cli.ephemeral {
         return Err("--persistent and --ephemeral are mutually exclusive".to_owned());
     }
-    if (cli.channel.is_some() || cli.all) && !cli.revoke {
-        return Err("--channel and --all require --revoke".to_owned());
+    if cli.all && !cli.revoke {
+        return Err("--all requires --revoke".to_owned());
     }
-    if cli.revoke && (cli.channel.is_some() == cli.all) {
-        return Err("--revoke requires exactly one of --channel or --all".to_owned());
-    }
-    if let Some(channel) = &cli.channel {
-        if channel.len() != 17 || !channel.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
-            return Err("--channel must be a 17-character Base62 channel ID".to_owned());
-        }
+    if cli.revoke && (cli.label.is_some() == cli.all) {
+        return Err("--revoke requires exactly one of --label or --all".to_owned());
     }
     if let Some(label) = &cli.label {
         let trimmed = label.trim();
@@ -182,16 +207,25 @@ fn validate_cli(cli: Cli) -> Result<ValidatedCli, String> {
         }
     } else if cli.revoke {
         Action::Revoke
-    } else {
+    } else if cli.status {
         Action::Status
+    } else {
+        Action::Window
     };
+    // Content commands come from Grid, so keep the pairing window from covering it.
+    let window = explicit_window.or(match action {
+        Action::Word { .. } | Action::Sentence { .. } | Action::Clear | Action::Speak => {
+            Some(WindowRequest::Hide)
+        }
+        _ => None,
+    });
 
     Ok(ValidatedCli {
         action,
         text: cli.text,
         label: cli.label.map(|label| label.trim().to_owned()),
-        channel: cli.channel,
         all: cli.all,
+        window,
         timeout_ms: cli.timeout,
     })
 }
@@ -218,8 +252,8 @@ fn build_request(
         speak: None,
         channel_type: None,
         label: None,
-        channel_id: None,
         all: None,
+        window: command.window.map(WindowRequest::as_str),
     };
 
     match command.action {
@@ -260,10 +294,10 @@ fn build_request(
         }
         Action::Revoke => {
             request.cmd = "revoke";
-            request.channel_id = command.channel;
+            request.label = command.label;
             request.all = command.all.then_some(true);
         }
-        Action::Status => request.cmd = "status",
+        Action::Status | Action::Window => request.cmd = "status",
     }
     Ok(request)
 }
@@ -280,18 +314,22 @@ fn publisher_path() -> Result<PathBuf, String> {
         .join("AACpipe.exe"))
 }
 
-fn publisher_args() -> Result<Vec<OsString>, String> {
-    match env::var("AACPIPE_PUBLISHER_ARGS_JSON") {
+fn publisher_args(hidden: bool) -> Result<Vec<OsString>, String> {
+    let mut args = match env::var("AACPIPE_PUBLISHER_ARGS_JSON") {
         Ok(value) => serde_json::from_str::<Vec<String>>(&value)
             .map(|args| args.into_iter().map(OsString::from).collect())
-            .map_err(|error| format!("AACPIPE_PUBLISHER_ARGS_JSON is invalid: {error}")),
-        Err(env::VarError::NotPresent) => Ok(vec![OsString::from("--host")]),
-        Err(error) => Err(format!("cannot read publisher arguments: {error}")),
+            .map_err(|error| format!("AACPIPE_PUBLISHER_ARGS_JSON is invalid: {error}"))?,
+        Err(env::VarError::NotPresent) => vec![OsString::from("--host")],
+        Err(error) => return Err(format!("cannot read publisher arguments: {error}")),
+    };
+    if hidden {
+        args.push(OsString::from("--hidden"));
     }
+    Ok(args)
 }
 
 #[cfg(windows)]
-fn start_publisher() -> Result<(), String> {
+fn start_publisher(hidden: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
@@ -299,7 +337,7 @@ fn start_publisher() -> Result<(), String> {
     let path = publisher_path()?;
     let mut command = Command::new(&path);
     command
-        .args(publisher_args()?)
+        .args(publisher_args(hidden)?)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -314,6 +352,7 @@ fn transact_with_autostart(
     pipe_name: &str,
     request: &str,
     timeout_ms: u32,
+    start_hidden: bool,
 ) -> Result<String, (i32, String)> {
     let started = Instant::now();
     if let Ok(response) = pipe_transact(pipe_name, request, timeout_ms.min(INITIAL_PIPE_PROBE_MS)) {
@@ -321,6 +360,7 @@ fn transact_with_autostart(
     }
 
     let mutex_name = default_start_mutex_name().map_err(|error| (EXIT_OTHER, error.to_string()))?;
+    let startup_timeout_ms = timeout_ms.max(PUBLISHER_STARTUP_TIMEOUT_MS);
     let mut mutex =
         acquire_start_mutex(&mutex_name).map_err(|error| (EXIT_OTHER, error.to_string()))?;
     if mutex.is_owner {
@@ -330,11 +370,11 @@ fn transact_with_autostart(
             .map_err(|error| (EXIT_OTHER, error.to_string()))?;
         if publisher_mutex.is_owner {
             drop(publisher_mutex);
-            start_publisher().map_err(|error| (EXIT_PUBLISHER, error))?;
+            start_publisher(start_hidden).map_err(|error| (EXIT_PUBLISHER, error))?;
         }
     } else {
         let elapsed = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-        let remaining = timeout_ms.saturating_sub(elapsed);
+        let remaining = startup_timeout_ms.saturating_sub(elapsed);
         if remaining == 0
             || !mutex
                 .wait(remaining)
@@ -345,7 +385,7 @@ fn transact_with_autostart(
     }
 
     let elapsed = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-    let remaining = timeout_ms.saturating_sub(elapsed);
+    let remaining = startup_timeout_ms.saturating_sub(elapsed);
     if remaining == 0 {
         return Err((EXIT_PUBLISHER, "Publisher startup timed out".to_owned()));
     }
@@ -379,11 +419,22 @@ fn validate_response(raw: &str, request_id: &str) -> Result<Response, (i32, Stri
     }
 }
 
+fn normalize_argument(argument: OsString) -> OsString {
+    match argument.to_str() {
+        Some("-show") => OsString::from("--show"),
+        Some("-hide") => OsString::from("--hide"),
+        _ => argument,
+    }
+}
+
 fn run_from<I, T>(arguments: I) -> Result<Response, (i32, String)>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| normalize_argument(argument.into()));
     let cli = Cli::try_parse_from(arguments).map_err(|error| {
         let code = if error.kind() == ErrorKind::DisplayHelp
             || error.kind() == ErrorKind::DisplayVersion
@@ -396,6 +447,7 @@ where
     })?;
     let validated = validate_cli(cli).map_err(|error| (EXIT_ARGUMENTS, error))?;
     let timeout_ms = validated.timeout_ms;
+    let start_hidden = validated.window == Some(WindowRequest::Hide);
     let request = build_request(validated, || clipboard_text(Duration::from_millis(500)))?;
     let request_id = request.id.clone();
     let request_json = serde_json::to_string(&request)
@@ -404,7 +456,7 @@ where
         return Err((EXIT_PAYLOAD, "IPC request exceeds 128 KiB".to_owned()));
     }
     let pipe_name = default_pipe_name().map_err(|error| (EXIT_OTHER, error.to_string()))?;
-    let raw = transact_with_autostart(&pipe_name, &request_json, timeout_ms)?;
+    let raw = transact_with_autostart(&pipe_name, &request_json, timeout_ms, start_hidden)?;
     validate_response(&raw, &request_id)
 }
 
@@ -467,7 +519,7 @@ mod tests {
             Action::Pair { persistent: true }
         );
         assert_eq!(
-            parse(&["bridge", "--revoke", "--channel", "x7K9pL3mN2qR8TvQa"])
+            parse(&["bridge", "--revoke", "--label", "Mum"])
                 .unwrap()
                 .action,
             Action::Revoke
@@ -487,17 +539,62 @@ mod tests {
             vec!["bridge", "--pair", "--revoke", "--all"],
             vec!["bridge", "--pair", "--persistent", "--ephemeral"],
             vec!["bridge", "--revoke"],
-            vec![
-                "bridge",
-                "--revoke",
-                "--all",
-                "--channel",
-                "x7K9pL3mN2qR8TvQa",
-            ],
+            vec!["bridge", "--revoke", "--all", "--label", "Mum"],
+            vec!["bridge", "--revoke", "--label", "   "],
+            vec!["bridge", "--status", "--label", "Mum"],
+            vec!["bridge", "--revoke", "--persistent", "--label", "Mum"],
             vec!["bridge", "--status", "--text", "hello"],
         ] {
             assert!(parse(&arguments).is_err(), "{arguments:?} should fail");
         }
+    }
+
+    #[test]
+    fn window_requests_default_to_hide_for_content_and_accept_overrides() {
+        for (arguments, expected) in [
+            (vec!["bridge", "--word"], Some(WindowRequest::Hide)),
+            (vec!["bridge", "--sentence"], Some(WindowRequest::Hide)),
+            (vec!["bridge", "--clear"], Some(WindowRequest::Hide)),
+            (vec!["bridge", "--speak"], Some(WindowRequest::Hide)),
+            (
+                vec!["bridge", "--sentence", "--show"],
+                Some(WindowRequest::Show),
+            ),
+            (vec!["bridge", "--pair"], None),
+            (
+                vec!["bridge", "--pair", "--show"],
+                Some(WindowRequest::Show),
+            ),
+            (
+                vec!["bridge", "--revoke", "--all", "--hide"],
+                Some(WindowRequest::Hide),
+            ),
+            (vec!["bridge", "--status"], None),
+        ] {
+            assert_eq!(parse(&arguments).unwrap().window, expected, "{arguments:?}");
+        }
+        let show_only = parse(&["bridge", "--show"]).unwrap();
+        assert_eq!(show_only.action, Action::Window);
+        assert_eq!(show_only.window, Some(WindowRequest::Show));
+        let request = build_request(show_only, || -> Result<String, NativeError> {
+            unreachable!("window-only requests do not read the clipboard")
+        })
+        .unwrap();
+        assert_eq!(request.cmd, "status");
+        assert_eq!(request.window, Some("show"));
+        assert_eq!(
+            parse(&["bridge", "--hide"]).unwrap().window,
+            Some(WindowRequest::Hide)
+        );
+        assert!(parse(&["bridge", "--show", "--hide"]).is_err());
+        assert!(parse(&["bridge", "--show", "--text", "x"]).is_err());
+    }
+
+    #[test]
+    fn single_dash_window_switches_are_accepted() {
+        assert_eq!(normalize_argument("-show".into()), OsString::from("--show"));
+        assert_eq!(normalize_argument("-hide".into()), OsString::from("--hide"));
+        assert_eq!(normalize_argument("-x".into()), OsString::from("-x"));
     }
 
     #[test]
