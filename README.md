@@ -122,7 +122,7 @@ starts AACpipe.
 
 The development MVP requires its Publisher terminal to remain running. The
 Grid 3 test package runs the Publisher in Electron with a tray/window shell;
-mDNS discovery and a signed installer remain later work.
+A signed installer remains later work.
 
 ## Build and install the Grid 3 test package
 
@@ -145,10 +145,45 @@ can take several seconds. Configure Grid 3 to run:
 ```
 
 Use the action order in [the Grid 3 test-cell checklist](./docs/grid3-test-cell-actions.md).
-The pairing window displays QR codes for the available network interfaces;
+The pairing window recommends a stable `.local` QR code and also displays
+IP-address fallback QR codes for the available network interfaces;
 the AAC device and partner device must be on the same trusted network or AAC
 device hotspot. Allow the app on Private networks only if Windows Firewall
 prompts. This test build is unsigned, so Windows may show a publisher warning.
+
+### Stable .local address and IP fallbacks
+
+AACpipe advertises a unique hostname such as `aacpipe-0123456789abcdef.local`
+using mDNS, and an `_aacpipe._tcp.local` service with its listening port.
+The identity is saved in `%LOCALAPPDATA%\AACpipe\discovery.json` and reused
+after restarts. If another device claims the same name, the mDNS library
+selects a conflict-free name and AACpipe saves it. No pairing secrets or
+conversation content are advertised.
+
+Scan the **Recommended: stable .local address** QR first. On a compatible
+network this keeps the partner's browser address the same even when the AAC
+device's IP address changes. Both devices must still share a trusted network
+or the AAC device's hotspot; this does not add a direct-radio connection,
+internet dependency, or HTTPS.
+
+If the name does not resolve, scan the **IP-address fallback** for the shared
+network instead. Some devices, VPNs, firewalls and guest networks block mDNS
+(UDP 5353). Allow AACpipe on your trusted Private network; do not open router
+ports to the internet. If discovery cannot start, AACpipe shows a warning
+and continues accepting Grid commands and IP-address connections. Restart
+AACpipe to retry discovery. It monitors network interfaces while running.
+
+IP fallbacks use the same channel, encryption and revocation, but their address
+can change with the network. Switching between an IP address and `.local`
+requires scanning the pairing QR again because browser credentials and options
+belong to each address separately. There is no automatic migration.
+The Windows pairing window stays on `127.0.0.1`, and Grid's bridge still uses
+its Windows named pipe.
+
+For acceptance testing, try the recommended QR on both home Wi-Fi and the
+Windows hotspot, then test an IP fallback. Check reconnect after restarting
+AACpipe, and after an IP-address change on the same network. Physical
+Android/iPhone and hotspot interoperability still needs testing.
 
 ### Partner page options
 

@@ -6,6 +6,13 @@ For the packaged trial, start AACpipe from its shortcut and wait for the pairing
 window before testing cells. The bridge can auto-start it if needed, but a cold
 Publisher launch is slower than a warm command.
 
+In the pairing window, first try the **Recommended: stable .local address**
+QR code. If the partner's device cannot open it, use an **IP-address fallback**
+QR for the network both devices share. Grid's bridge commands are unchanged.
+Test both home Wi-Fi and the Windows hotspot; `.local` needs multicast DNS
+support on the network. Changing between `.local` and an IP link requires
+scanning the QR again.
+
 | Cell                     | Grid 3 action order                                                   | Bridge invocation                                          |
 | ------------------------ | --------------------------------------------------------------------- | ---------------------------------------------------------- |
 | Word                     | Copy the new word to the clipboard, then run the bridge               | `aacpipe-bridge.exe --word`                                |

@@ -1,8 +1,8 @@
 # AACpipe Implementation Plan
 
-**Plan status:** Runnable local-network MVP and unsigned Grid 3 test package complete; paused pending the physical Grid 3 trial. mDNS and pilot-release work remain.<br>
+**Plan status:** Runnable local-network MVP, unsigned Grid 3 test package and stable mDNS hostname implemented. Physical phone/hotspot interoperability and pilot-release work remain.<br>
 **Target release:** v0.1 Windows / Grid 3<br>
-**Last updated:** 2026-10-17<br>
+**Last updated:** 2026-10-21<br>
 **Protocol source:** [AACPipe Partner Screen App Protocol.md](./AACPipe%20Partner%20Screen%20App%20Protocol.md)
 
 **Current gate:** Do not begin further product work until the test package has been tried with Grid 3 and the results reviewed.
@@ -56,7 +56,7 @@ This is the working delivery plan for AACpipe. Update it throughout development:
 | Runtime validation      | Zod                                                                                    | TypeScript types alone do not validate hostile wire or IPC input.                                                                        |
 | Cryptography            | Reviewed pure TypeScript packages from the Noble project, subject to Milestone 0 spike | The LOCAL HTTP page cannot assume Web Crypto is available. The same implementation can generate deterministic browser/Node test vectors. |
 | Persistence             | Versioned JSON metadata plus DPAPI-protected secret blobs; atomic file replacement     | Small v0.1 data model without introducing a database, while keeping secrets protected at rest.                                           |
-| mDNS                    | A maintained Node DNS-SD/mDNS package selected during dependency review                | Local service discovery and stable per-Publisher hostname advertisement.                                                                 |
+| mDNS                    | `@homebridge/ciao`                                                                     | Local service discovery, collision probing and live network-interface monitoring.                                                        |
 | QR generation           | A local QR encoder package with no runtime network dependency                          | Generate pairing QR codes fully offline.                                                                                                 |
 | TypeScript tests        | Vitest                                                                                 | Fast unit and integration testing across shared packages and apps.                                                                       |
 | Browser tests           | Playwright                                                                             | Subscriber behavior, reconnect, storage, responsive layout, and accessibility flows.                                                     |
@@ -380,7 +380,7 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 - [x] Implement DPAPI-protected persistent secret storage.
 - [x] Implement atomic metadata writes and schema migrations.
 - [x] Implement non-secret revocation tombstones and bounded cleanup policy.
-- [ ] Implement stable per-Publisher device ID and mDNS hostname persistence.
+- [x] Implement stable per-Publisher device ID and mDNS hostname persistence.
 - [x] Implement channel label validation and privacy-preserving display.
 - [x] Implement pair, revoke-one, revoke-all, clear, and status management commands.
 - [x] Implement pairing URL generation using the compact fragment format.
@@ -482,7 +482,7 @@ Milestone 2 is complete locally. The shared JSON corpus covers every v0.1 comman
 - [ ] Verify ephemeral pairing ends on disconnect. One-time pairing is implemented (window, tray, and `--pair --ephemeral`; ends on authenticated disconnect, manual end, or quit) with unit coverage; physical-phone verification remains.
 - [ ] Verify partner-page Options (speak aloud, alert tone, keep screen awake, local Forget) on physical Android Chrome and iOS Safari.
 - [ ] Verify home Wi-Fi and Windows hotspot workflows.
-- [ ] Verify mDNS and document direct-IP ephemeral fallback.
+- [ ] Verify mDNS on physical partner devices and hotspots; labelled direct-IP compatibility fallbacks are implemented and documented.
 - [ ] Test Android Chrome and iOS Safari on physical devices.
 - [ ] Conduct an initial session with at least one Grid 3 user or representative accessibility tester.
 - [ ] Record usability findings without storing communicated text.
@@ -637,12 +637,14 @@ During development, prefer targeted workspace commands before the full suite.
 | 2026-10-19 | Channel labels are unique (case-insensitive) and replace channel IDs for bridge revocation; window-created permanent pairings require a label, bridge pairings without one are auto-named. | Grid cells and AAC users can name partners instead of copying random IDs.                                            | Accepted              |
 | 2026-10-19 | Content bridge commands hide the pairing window by default; any command can carry `--show`/`--hide` (optional IPC `window` field), and either flag alone only shows/hides the window.      | Stop the AACpipe window covering Grid 3 while letting pairing cells bring it forward.                                | Accepted              |
 
+| 2026-10-21 | Recommend a persisted per-installation `.local` hostname, retaining labelled IP-address links for both channel types. No browser pairing migration is required. | Stable origins where mDNS works, with the already-tested IP path available on incompatible networks. | Accepted |
+
 ## 10. Open Decisions
 
 - [x] Final executable names and Grid 3 command paths.
 - [ ] Minimum supported Windows and Grid 3 versions.
 - [ ] Minimum supported Android Chrome and iOS Safari versions.
-- [ ] Exact mDNS package after maintenance and interoperability review.
+- [x] Select `@homebridge/ciao` for mDNS; physical Android/iPhone and hotspot interoperability remains an acceptance check.
 - [ ] Electron idle-resource budget and whether a lighter shell is required.
 - [ ] Code-signing certificate and release identity.
 - [ ] Installer behavior for Windows startup and firewall configuration.
@@ -655,6 +657,7 @@ During development, prefer targeted workspace commands before the full suite.
 
 | Date       | Change                                                                                                                                                                                                                        |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-21 | Added stable `.local` discovery using `@homebridge/ciao`, persisted collision-resolved identities, recommended hostname QR codes, and IP-address compatibility fallbacks. Discovery failures do not block Grid IPC or HTTP.   |
 | 2026-10-08 | Initial implementation plan created from protocol v0.1 and agreed Grid 3 command-bridge approach.                                                                                                                             |
 | 2026-10-08 | Completed local Milestone 1 validation after installing Rust stable 1.99.0 with rustfmt and clippy; generated Cargo.lock and cleared the Rust validation block.                                                               |
 | 2026-10-08 | Added Windows PowerShell guidance for refreshing the user-local Cargo path after Rustup installation.                                                                                                                         |

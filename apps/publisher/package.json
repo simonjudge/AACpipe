@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@homebridge/ciao": "^1.3.12",
     "@aacpipe/crypto": "0.1.0",
     "@aacpipe/domain": "0.1.0",
     "@aacpipe/ipc-schema": "0.1.0",

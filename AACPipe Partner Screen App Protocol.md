@@ -108,18 +108,20 @@ The Subscriber must not persist composition text, symbols, decrypted payloads, s
 
 Browser private modes, storage eviction policies, or operating-system deletion of site data may remove the local pairing record; this is an external deletion rather than protocol revocation. The Publisher channel remains valid, but that Subscriber will need the existing channel QR to restore its local credential. A browser that cannot demonstrate durable origin storage must warn that persistent pairing is unavailable rather than silently treating the channel as persistent. Under normal supported-browser operation, reload, tab closure, browser restart, Publisher restart, and transient network loss do not delete a persistent pairing record.
 
-Persistent pairing URLs use a stable, per-Publisher mDNS hostname so the browser origin and stored pairing record remain stable across local IP address changes. The illustrative default `aacpipe.local` is suitable only when there is one AACpipe Publisher on the network. An implementation must derive and persist a collision-resistant hostname such as `aacpipe-{deviceId}.local`, handle mDNS collision renaming consistently, and continue advertising the same hostname after restart. Direct-IP URLs are intended primarily as an ephemeral fallback and must not be offered as durable persistent pairing.
+Recommended persistent pairing URLs use a stable, per-Publisher mDNS hostname so the browser origin and stored pairing record remain stable across local IP address changes. The illustrative default `aacpipe.local` is suitable only when there is one AACpipe Publisher on the network. An implementation must derive and persist a collision-resistant hostname such as `aacpipe-{deviceId}.local`, handle mDNS collision renaming consistently, and continue advertising the same hostname after restart. Direct-IP URLs remain available as explicitly labelled compatibility fallbacks for both channel types, but cannot promise address stability. Changing between the hostname and an IP address requires scanning the pairing QR again; browser credentials and preferences are origin-scoped and are not migrated.
 
 5. ### **mDNS Addressing (aacpipe.local)**
 
 - The Publisher daemon advertises its local network service via Multicast DNS as `_aacpipe._tcp.local` and binds to its persisted, collision-resistant per-Publisher hostname. Examples use `aacpipe.local` for readability only.
+- The Windows implementation uses `@homebridge/ciao`, saves its hostname and service name in `discovery.json`, and advertises IPv4 records matching its IPv4 HTTP listener. It monitors network-interface changes and persists conflict-resolved names. TXT records contain only the protocol version and root path, never channel IDs, pairing secrets or messages.
+- Advertising runs independently of Grid command processing. If it fails or is slow, the pairing window explains that IP-address fallbacks remain available. Even successful advertising cannot guarantee name resolution on devices or networks that block mDNS (UDP 5353). The management window stays on loopback, with its existing origin restrictions.
 - **Dynamic Pairing URL:**
 
 ```
   http://aacpipe.local:8080/#{flag}:{channelId}:{base64Key}`
 ```
 
-- **Fallback**: If mDNS resolution fails on certain legacy Android or locked-down network configurations, an ephemeral QR code can use the AAC device's current IPv4 address, for example:
+- **Fallback**: If mDNS resolution fails on certain legacy Android or locked-down network configurations, a fallback QR code can use the AAC device's current IPv4 address, for example:
 
 ```
   http://192.168.1.45:8080/#{flag}:{channelId}:{base64Key}`

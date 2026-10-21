@@ -8,6 +8,7 @@ import path from 'node:path';
 import QRCode from 'qrcode';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 
+import { pairingLinks, startDiscovery, type DiscoveryState } from './discovery.js';
 import { createMvpRequestHandler } from './mvp-handler.js';
 import {
   loadNativeModule,
@@ -205,22 +206,23 @@ function trustedManagementOrigin(request: IncomingMessage): boolean {
   );
 }
 
-async function pairingOptionsHtml(core: PublisherCore, channel: ChannelRecord): Promise<string> {
+async function pairingOptionsHtml(
+  core: PublisherCore,
+  channel: ChannelRecord,
+  discovery: DiscoveryState,
+): Promise<string> {
   const addresses = localAddresses();
   const fragment = core.pairingFragment(channel);
-  const urls = (addresses.length === 0 ? ['127.0.0.1'] : addresses).map(
-    (address) =>
-      `http://${address}:${String(port)}/?channel=${encodeURIComponent(channel.channelId)}${fragment}`,
-  );
   const options = await Promise.all(
-    urls.map(async (url) => ({
-      url,
-      qr: await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 2, width: 320 }),
+    pairingLinks(discovery, addresses, port, channel.channelId, fragment).map(async (link) => ({
+      ...link,
+      qr: await QRCode.toDataURL(link.url, { errorCorrectionLevel: 'M', margin: 2, width: 320 }),
     })),
   );
   return options
     .map(
-      ({ url, qr }) => `<div class="pairing-option">
+      ({ label, url, qr }) => `<div class="pairing-option">
+        <h3>${html(label)}</h3>
         <img src="${qr}" alt="Pairing QR code for ${html(channel.label ?? 'Partner')}" />
         <p><a href="${html(url)}">${html(url)}</a></p>
       </div>`,
@@ -280,7 +282,11 @@ function revokeConfirmationPage(channel: ChannelRecord): string {
   );
 }
 
-async function managementPage(core: PublisherCore, error?: string): Promise<string> {
+async function managementPage(
+  core: PublisherCore,
+  discovery: DiscoveryState,
+  error?: string,
+): Promise<string> {
   const channels = core.registry.list();
   const oneTime = channels.filter((channel) => channel.channelType === 'ephemeral').reverse();
   const persistent = channels.filter((channel) => channel.channelType === 'persistent');
@@ -291,7 +297,7 @@ async function managementPage(core: PublisherCore, error?: string): Promise<stri
       const body = connected
         ? '<p class="connected">Partner connected. This pairing ends when they close the page or lose connection.</p>'
         : `<p>Ask the partner to scan this QR code. It works once and ends when they disconnect.</p>
-           ${await pairingOptionsHtml(core, channel)}`;
+           ${await pairingOptionsHtml(core, channel, discovery)}`;
       return `<section class="one-time">
         ${sectionHeading(channel)}
         ${body}
@@ -308,7 +314,7 @@ async function managementPage(core: PublisherCore, error?: string): Promise<stri
             ? '<span class="connected">Partner connected.</span> '
             : ''
         }Scan the QR code for the network used by both devices. This pairing is remembered until it is revoked.</p>
-        ${await pairingOptionsHtml(core, channel)}
+        ${await pairingOptionsHtml(core, channel, discovery)}
       </section>`,
     ),
   );
@@ -318,6 +324,15 @@ async function managementPage(core: PublisherCore, error?: string): Promise<stri
     'AACpipe Pairing',
     `<h1>AACpipe partner pairing</h1>
   <p>This page is available only on this Windows device. Pairing links contain a secret; do not share them with anyone other than the intended partner.</p>
+  ${
+    discovery.status === 'ready'
+      ? `<p>Try the recommended <strong>${html(discovery.hostname)}</strong> QR code first. If it does not open on your partner device, use an IP-address fallback for your shared network. IP-address links can change when you switch networks.</p>`
+      : `<p class="notice" role="status">${
+          discovery.status === 'starting'
+            ? 'Setting up the .local address. You can use an IP-address fallback now.'
+            : '.local discovery is unavailable. Use an IP-address fallback below. Check that your trusted network allows mDNS (UDP 5353), then restart AACpipe to retry.'
+        }</p>`
+  }
   ${errorMessage === undefined ? '' : `<p class="notice" role="alert">${html(errorMessage)}</p>`}
   <div class="toolbar">
     <form method="post" action="/manage/one-time">
@@ -487,7 +502,7 @@ export async function startMvp(
         return;
       }
       securityHeaders(response, "'self'");
-      void managementPage(core, url.searchParams.get('error') ?? undefined)
+      void managementPage(core, discovery.state(), url.searchParams.get('error') ?? undefined)
         .then((page) => {
           response.setHeader('Content-Type', 'text/html; charset=utf-8');
           response.end(page);
@@ -649,6 +664,7 @@ export async function startMvp(
   });
 
   const pipe = new native.SecurePipeServer(native.defaultPipeName());
+  const discovery = startDiscovery(dataDirectory, port, () => notifyChannels('changed'));
   console.log(`AACpipe Publisher: partner screen listening on port ${String(port)}`);
   console.log(`AACpipe Publisher: pairing management http://127.0.0.1:${String(port)}/manage`);
 
@@ -663,6 +679,11 @@ export async function startMvp(
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
       setTimeout(resolve, 1000).unref();
+    });
+    await discovery.close().catch((error: unknown) => {
+      console.warn(
+        `AACpipe Publisher: mDNS shutdown failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   };
 
