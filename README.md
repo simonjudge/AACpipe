@@ -2,7 +2,8 @@
 
 **An additional partner screen for AAC users.** Send composed text from
 a Windows AAC device to a partner's phone or tablet browser over a trusted
-local network, without an account or AACpipe cloud service.
+local network, without an app (uses browser) account or AACpipe cloud service.  
+The AAC user sets up a channel and the user navigates to this using a QR code.
 
 **Experimental Windows preview: `0.1.0-preview.1`.** Not a replacement for the
 user's normal AAC communication. This preview is unsigned.

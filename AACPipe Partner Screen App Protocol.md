@@ -2,23 +2,15 @@
 
 **Status:** Design draft, revision 0.2; not an implemented or frozen standard
 
-**Wire major version:** 2
-
-**Audience:** Independent AAC application, partner application and device implementers
+**Audience:** AAC developers and practitioners
 
 **Updated:** 2026-10-22
 
-> This document describes a proposed wire-2 protocol. The current Windows/Grid 3
-> preview implements legacy wire 1, not this draft. Editing this specification
-> does not upgrade that implementation. See Appendix B for known differences.
-> Independent interoperability, fixed test vectors and physical-device testing
-> are release gates, not claims made by this document.
-
 ## 1. Purpose, scope and conformance
 
-AACpipe connects an AAC user's authoritative composition to a communication
-partner's application or device. It supports live partner displays and optional
-partner contributions without transferring control of the AAC user's message.
+AACpipe connects an AAC user's composition to a communication partner's application
+or device. It supports live partner displays and optional partner contributions
+without transferring control of the AAC user's message.
 
 The protocol defines observable messages and behaviour. It does not require a
 particular operating system, programming language, application architecture,
@@ -54,14 +46,14 @@ Internet relays and authenticated HTTPS bootstrap are not defined by this draft.
 ### 1.2 Fundamental requirements
 
 - The Publisher is authoritative for each channel's composition and permissions.
-- A partner suggestion MUST NOT modify composition, trigger speech or invoke
-  AAC commands without the AAC user's explicit action through the AAC interface.
 - Content clearing, credential revocation and local forgetting are distinct.
 - Recoverable state MUST be distinguishable from actions with side effects.
 - Failure, unsupported features and unavailable persistence MUST be surfaced;
   implementations MUST NOT silently claim a capability or guarantee they lack.
 - The defined local transport MUST operate without an internet connection,
   external account, remote asset download, analytics or cloud service.
+- A partner suggestion MUST NOT modify composition, trigger speech or invoke
+  AAC commands without the AAC user's explicit action through the AAC interface.
 
 ## 2. Roles and object model
 
@@ -853,56 +845,3 @@ The preview supports `--word`, `--sentence`, `--clear`, `--speak`, `--pair`,
 `--revoke`, `--status`, direct `--text`, and window controls. These flags are
 not required of alternative implementations. See the [Grid integration guide](docs/grid3-test-cell-actions.md)
 and [development documentation](docs/development.md) for current usage.
-
-## Appendix B. Legacy preview compatibility (informative)
-
-The previous document combined wire-1 design, Windows requirements and future
-ideas. Neither that document nor this revision should be taken as evidence
-that every described behaviour has been implemented.
-
-| Area | Legacy document/current preview | Proposed wire 2 |
-| --- | --- | --- |
-| Version | Protocol document v0.1, wire `v: 1`. | Design revision 0.2, wire `v: 2`; not implemented. |
-| Pairing | Old document uses numeric `0`/`2`; preview uses `e`/`p` and query `channel`. | Explicit `#2:lifetime:cid:kid:secret` plus matching query IDs. |
-| WebSocket | Old document `/?cid=...`; preview `/ws?channel=...`. | `/aacpipe/v2?channel=...&credential=...`. |
-| Identity | One channel secret and 17-character Base62 channel ID. | Separate channel/credential/session; 16-byte Base64URL IDs. |
-| Negotiation | Three read-only capabilities; no explicit session confirmation. | Authenticated SESSION_OPEN with active profiles, capabilities and permissions. |
-| Cryptography | Legacy HKDF/transcript; shared implementation supplies details absent from prose. | Explicitly different v2 transcript/key schedule; new vectors/review required. |
-| Decrypted events | Original examples omit `v`; preview schemas require it. | `v: 2` required at all three layers. |
-| Restart | Saved revision with empty restored composition. | Fresh content generation, empty state, revision zero. |
-| Liveness | Preview server WebSocket ping every 20 seconds. | Observable encrypted heartbeat/ACK and 30-second timeout. |
-| Revocation | Old text promises offline tombstone recognition; current upgrade path rejects missing channels before that handshake. | Confirmed revocation distinguished from ambiguous pre-authentication failure. |
-| Speech | SPEAKING transition with estimated hold; receiver infers optional announcement. | State separate from identified, opt-in, non-replayed action notifications. |
-| Suggestions | Future sketch only; preview rejects content after authentication. | Optional specified submission/receipt/outcome lifecycle, not direct editing. |
-
-Migration requires deliberate implementation work and new pairing credentials;
-existing wire-1 secrets/URLs MUST NOT be reinterpreted as wire 2. A product MAY
-run separately identified legacy and v2 endpoints during transition, but must
-not imply identical guarantees or silently downgrade.
-
-Existing implementation guidance and acceptance status remain in the
-[implementation plan](implementation_plan.md), [README](README.md) and
-[acceptance record](docs/acceptance-tests.md). In particular, desktop automation
-does not establish physical Grid, phone or hotspot compatibility.
-
-## Appendix C. Decisions recorded for this revision (informative)
-
-The following policies were confirmed during the protocol review:
-
-- Introduce draft wire major 2; label the current implementation legacy wire 1.
-- Give each channel its own authoritative view; mirroring is permitted.
-- Separate a small core, transport/application profiles and optional features.
-- Move Windows, Grid and UI prescriptions to implementation guidance.
-- Define an optional interoperable text-candidate suggestions extension.
-- End temporary pairings on authenticated disconnect, with no base grace period.
-- Reject a second authenticated session as busy rather than displacing the first.
-- Separate speech/attention actions from snapshots; require local sound opt-in.
-- Match suggestions to exact revisions; expire them on any revision change.
-- Delete persistent credentials only on authenticated revocation or local
-  forgetting, not an unauthenticated network indication.
-
-Consequences include new implementation/migration work, re-pairing for v2,
-possible busy waits until stale-session timeout, and new pairing after a
-temporary receiver reload. These are explicit policy choices, not accidental
-side effects. Wire-level proposals in this draft remain subject to the
-validation gates in section 12 before freezing.
