@@ -2,13 +2,16 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { networkInterfaces } from 'node:os';
+import { arch, networkInterfaces, platform, release } from 'node:os';
 import path from 'node:path';
 
 import QRCode from 'qrcode';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 
 import { pairingLinks, startDiscovery, type DiscoveryState } from './discovery.js';
+import { appInfo } from './app-info.js';
+import { Diagnostics } from './diagnostics.js';
+import { hasManagementAccess } from './management-access.js';
 import { createMvpRequestHandler } from './mvp-handler.js';
 import {
   loadNativeModule,
@@ -40,6 +43,8 @@ const sockets = new Set<WebSocket>();
 const socketAlive = new WeakMap<WebSocket, boolean>();
 const socketChannels = new WeakMap<WebSocket, string>();
 const managementToken = randomBytes(32).toString('base64url');
+const managementAccess = randomBytes(32).toString('base64url');
+const diagnostics = new Diagnostics();
 const managementErrors = new Map([
   ['label-in-use', 'A pairing with that name already exists. Choose a different name.'],
   ['label-invalid', 'Enter a name of 1 to 128 characters for the permanent pairing.'],
@@ -51,6 +56,7 @@ export type WindowRequest = 'show' | 'hide';
 
 export interface MvpPublisher {
   readonly port: number;
+  readonly managementAccess: string;
   createOneTimePairing(): Promise<void>;
   onChannelsChanged(listener: (change: ChannelChange) => void): void;
   onWindowRequest(listener: (request: WindowRequest) => void): void;
@@ -87,14 +93,14 @@ function commandSummary(payload: string): { command: string; window?: WindowRequ
   return { command: 'invalid' };
 }
 
-function localAddresses(): string[] {
-  const addresses = new Set<string>();
-  for (const entries of Object.values(networkInterfaces())) {
+function localAddresses(): Array<{ address: string; adapter: string }> {
+  const addresses = new Map<string, string>();
+  for (const [adapter, entries] of Object.entries(networkInterfaces())) {
     for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) addresses.add(entry.address);
+      if (entry.family === 'IPv4' && !entry.internal) addresses.set(entry.address, adapter);
     }
   }
-  return [...addresses];
+  return [...addresses].map(([address, adapter]) => ({ address, adapter }));
 }
 
 function html(value: string): string {
@@ -214,20 +220,31 @@ async function pairingOptionsHtml(
   const addresses = localAddresses();
   const fragment = core.pairingFragment(channel);
   const options = await Promise.all(
-    pairingLinks(discovery, addresses, port, channel.channelId, fragment).map(async (link) => ({
+    pairingLinks(
+      discovery,
+      addresses.map(({ address }) => address),
+      port,
+      channel.channelId,
+      fragment,
+    ).map(async (link) => ({
       ...link,
       qr: await QRCode.toDataURL(link.url, { errorCorrectionLevel: 'M', margin: 2, width: 320 }),
     })),
   );
-  return options
-    .map(
-      ({ label, url, qr }) => `<div class="pairing-option">
-        <h3>${html(label)}</h3>
+  const rendered = options.map(({ label, url, qr }) => {
+    const adapter = addresses.find(({ address }) => new URL(url).hostname === address)?.adapter;
+    return `<div class="pairing-option">
+        <h3>${html(label)}${adapter === undefined ? '' : ` (${html(adapter)})`}</h3>
         <img src="${qr}" alt="Pairing QR code for ${html(channel.label ?? 'Partner')}" />
         <p><a href="${html(url)}">${html(url)}</a></p>
-      </div>`,
-    )
-    .join('');
+        <button type="button" data-copy-link>Copy link</button>
+      </div>`;
+  });
+  if (discovery.status !== 'ready') return rendered.join('');
+  return `${rendered[0] ?? ''}
+    <details class="fallbacks"><summary>IP-address fallbacks (if .local does not open)</summary>
+    <p>Choose the adapter on your shared network, not a VPN. These links contain the same secret.</p>
+    ${rendered.slice(1).join('')}</details>`;
 }
 
 function tokenField(): string {
@@ -256,7 +273,7 @@ function sectionHeading(channel: ChannelRecord): string {
 function pageShell(title: string, body: string): string {
   return `<!doctype html>
   <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width">
-  <title>${html(title)}</title><link rel="stylesheet" href="/manage.css"></head>
+  <title>${html(title)}</title><link rel="stylesheet" href="/manage/style.css"><script type="module" src="/manage/script.js"></script></head>
   <body>${body}</body></html>`;
 }
 
@@ -296,7 +313,7 @@ async function managementPage(
       const connected = core.subscriberCount(channel.channelId) > 0;
       const body = connected
         ? '<p class="connected">Partner connected. This pairing ends when they close the page or lose connection.</p>'
-        : `<p>Ask the partner to scan this QR code. It works once and ends when they disconnect.</p>
+        : `<p><strong>Waiting for partner.</strong> Ask the partner to scan this QR code. It works once and ends when they disconnect.</p>
            ${await pairingOptionsHtml(core, channel, discovery)}`;
       return `<section class="one-time">
         ${sectionHeading(channel)}
@@ -312,7 +329,7 @@ async function managementPage(
         <p>${
           core.subscriberCount(channel.channelId) > 0
             ? '<span class="connected">Partner connected.</span> '
-            : ''
+            : '<strong>Waiting for partner.</strong> '
         }Scan the QR code for the network used by both devices. This pairing is remembered until it is revoked.</p>
         ${await pairingOptionsHtml(core, channel, discovery)}
       </section>`,
@@ -324,6 +341,9 @@ async function managementPage(
     'AACpipe Pairing',
     `<h1>AACpipe partner pairing</h1>
   <p>This page is available only on this Windows device. Pairing links contain a secret; do not share them with anyone other than the intended partner.</p>
+  <p class="preview">Experimental preview ${html(appInfo.version)}. Trusted private networks only. An active attacker on the network could access conversation text.</p>
+  <p><a class="button-link" href="/manage">Refresh network information</a></p>
+  <p id="copy-status" role="status" aria-live="polite"></p>
   ${
     discovery.status === 'ready'
       ? `<p>Try the recommended <strong>${html(discovery.hostname)}</strong> QR code first. If it does not open on your partner device, use an IP-address fallback for your shared network. IP-address links can change when you switch networks.</p>`
@@ -347,7 +367,31 @@ async function managementPage(
     </form>
   </div>
   ${oneTimeSections.join('')}
-  ${persistentSections.join('') || '<p>No permanent pairings exist. Enter a partner name above and select <strong>New permanent pairing</strong>.</p>'}`,
+  ${persistentSections.join('') || '<p>No permanent pairings exist. Enter a partner name above and select <strong>New permanent pairing</strong>.</p>'}
+  <footer>
+    <details><summary>About AACpipe ${html(appInfo.version)}</summary>
+    <p>By ${html(appInfo.author)}. ${html(appInfo.license)} licence. Unsigned experimental Windows preview.</p>
+    <p>An additional communication display, not a replacement for your AAC app or speech output. No cloud service or analytics. Trusted local networks only.</p>
+    <p>Third-party notices and the licence are included with the installation.</p>
+    </details>
+    <details><summary>Diagnostics (safe to review and share)</summary>
+    <p>No conversation text, pairing links, names, network addresses or secrets are included.</p>
+    <pre id="diagnostics-text">${html(
+      diagnostics.report({
+        version: appInfo.version,
+        platform: platform(),
+        release: release(),
+        architecture: arch(),
+        discovery,
+        adapterCount: localAddresses().length,
+        channelCount: channels.length,
+        subscriberCount: core.subscriberCount(),
+        port,
+      }),
+    )}</pre>
+    <button type="button" id="copy-diagnostics">Copy diagnostics</button>
+    </details>
+  </footer>`,
   );
 }
 
@@ -401,6 +445,7 @@ export async function startMvp(
     pathname: string,
   ): Promise<void> => {
     const forbidden = (): void => {
+      diagnostics.record('management-rejected');
       response.statusCode = 403;
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
       response.end(
@@ -468,12 +513,28 @@ export async function startMvp(
     securityHeaders(response);
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
     if (
+      url.pathname.startsWith('/manage') &&
+      (!isLoopback(request) || !hasManagementAccess(request.headers.cookie, managementAccess))
+    ) {
+      diagnostics.record('management-rejected');
+      response.statusCode = 403;
+      response.setHeader('Content-Type', 'text/html; charset=utf-8');
+      response.end(
+        pageShell(
+          'Open AACpipe',
+          '<h1>Open the AACpipe pairing window</h1><p>Pairing management is available only inside the AACpipe app. Open it from the Windows tray or shortcut.</p>',
+        ),
+      );
+      return;
+    }
+    if (
       request.method === 'POST' &&
       (url.pathname === '/manage/one-time' ||
         url.pathname === '/manage/permanent' ||
         url.pathname === '/manage/revoke')
     ) {
       void handleManagementPost(request, response, url.pathname).catch((error: unknown) => {
+        diagnostics.record('management-failed');
         console.error(
           `AACpipe Publisher: management action failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -508,6 +569,7 @@ export async function startMvp(
           response.end(page);
         })
         .catch((error: unknown) => {
+          diagnostics.record('page-failed');
           console.error(
             `AACpipe Publisher: pairing page failed: ${error instanceof Error ? error.message : String(error)}`,
           );
@@ -528,8 +590,16 @@ export async function startMvp(
       );
       return;
     }
-    if (url.pathname === '/manage.css') {
+    if (url.pathname === '/manage/style.css') {
       streamFile(response, path.join(subscriberPublic, 'manage.css'), 'text/css; charset=utf-8');
+      return;
+    }
+    if (url.pathname === '/manage/script.js') {
+      streamFile(
+        response,
+        path.join(root, 'apps', 'subscriber', 'dist', 'manage.js'),
+        'text/javascript; charset=utf-8',
+      );
       return;
     }
     if (url.pathname === '/subscriber.js') {
@@ -664,7 +734,10 @@ export async function startMvp(
   });
 
   const pipe = new native.SecurePipeServer(native.defaultPipeName());
-  const discovery = startDiscovery(dataDirectory, port, () => notifyChannels('changed'));
+  const discovery = startDiscovery(dataDirectory, port, () => {
+    if (discovery.state().status === 'unavailable') diagnostics.record('discovery-unavailable');
+    notifyChannels('changed');
+  });
   console.log(`AACpipe Publisher: partner screen listening on port ${String(port)}`);
   console.log(`AACpipe Publisher: pairing management http://127.0.0.1:${String(port)}/manage`);
 
@@ -717,6 +790,7 @@ export async function startMvp(
             `AACpipe Publisher: command=${command} state=${response.state} revision=${response.revision} channels=${response.channels} subscribers=${response.subscribers}`,
           );
         } else {
+          diagnostics.record('ipc-rejected');
           console.log(`AACpipe Publisher: command=${command} rejected code=${response.code}`);
         }
       }
@@ -731,6 +805,7 @@ export async function startMvp(
   void receiveCommands();
   return {
     port,
+    managementAccess,
     async createOneTimePairing() {
       await handler.pair('ephemeral');
       notifyChannels('paired');

@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest an improvement using invented examples only.
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What communication need would this address?
+      description: Describe the user and partner workflow without private conversations or identifying information.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested behavior and alternatives
+      description: Include accessibility considerations and how normal AAC communication should remain available.
+    validations:
+      required: true

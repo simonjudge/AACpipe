@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, Tray } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeImage, session, Tray } from 'electron';
 import path from 'node:path';
 import type { MvpPublisher } from './mvp.js';
+import { managementCookieName } from './management-access.js';
 
 let publisher: MvpPublisher | undefined;
 let tray: Tray | undefined;
@@ -8,9 +9,7 @@ let window: BrowserWindow | undefined;
 let quitRequested = false;
 
 function createTrayIcon(): Electron.NativeImage {
-  const icon = nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR42mMQz27/P5CYYdQBow5AF6A1GHXAqAOGrgPIzWajUTDqgNFcMBoFow4YdQDJDiA2O1Erm446YNQBDNQu20e7ZqQ6AAAYGrqGAY9kxAAAAABJRU5ErkJggg==',
-  );
+  const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'build', 'icon.png'));
   if (icon.isEmpty()) throw new Error('Could not create the AACpipe tray icon');
   return icon;
 }
@@ -53,11 +52,26 @@ function openManagementWindow(): void {
     minHeight: 480,
     title: 'AACpipe partner pairing',
     autoHideMenuBar: true,
+    icon: createTrayIcon(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, destination) => {
+    const target = new URL(destination);
+    const management = new URL(managementUrl());
+    if (target.origin !== management.origin || !target.pathname.startsWith('/manage')) {
+      event.preventDefault();
+      void dialog.showMessageBox({
+        type: 'info',
+        title: 'Open this link on the partner device',
+        message:
+          'Scan the QR code with the partner device, or use Copy link. Pairing links are private.',
+      });
+    }
   });
   window.on('close', (event) => {
     if (!quitRequested) {
@@ -118,6 +132,14 @@ async function startApplication(): Promise<void> {
     app.quit();
     return;
   }
+  await session.defaultSession.cookies.set({
+    url: managementUrl(),
+    name: managementCookieName,
+    value: publisher.managementAccess,
+    path: '/manage',
+    httpOnly: true,
+    sameSite: 'strict',
+  });
   publisher.onChannelsChanged(showPairingChanges);
   publisher.onWindowRequest((request) => {
     if (request === 'show') openManagementWindow();
@@ -130,6 +152,18 @@ async function startApplication(): Promise<void> {
     Menu.buildFromTemplate([
       { label: 'Open partner pairing', click: openManagementWindow },
       { label: 'New one-time pairing', click: createOneTimePairing },
+      {
+        label: 'About AACpipe',
+        click: () => {
+          void dialog.showMessageBox({
+            type: 'info',
+            title: 'About AACpipe',
+            message: `AACpipe ${app.getVersion()} (experimental preview)`,
+            detail:
+              'Simon Judge | MIT licence\nAn additional AAC partner display for trusted local networks.\nUnsigned preview; not a replacement for normal AAC speech or communication.',
+          });
+        },
+      },
       { type: 'separator' },
       { label: 'Quit AACpipe', click: () => app.quit() },
     ]),

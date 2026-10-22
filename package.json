@@ -1,12 +1,18 @@
 {
   "name": "aacpipe",
-  "version": "0.1.0",
+  "version": "0.1.0-preview.1",
+  "author": "Simon Judge",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simonjudge/AACpipe.git"
+  },
   "private": true,
   "type": "module",
   "main": "dist/apps/publisher/src/main/electron-main.cjs",
   "description": "AACpipe local partner screen application",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "workspaces": [
     "apps/*",
@@ -30,7 +36,10 @@
     "test:watch": "vitest",
     "test:vertical-slice": "vitest run apps/publisher/src/main/vertical-slice.test.ts",
     "test:e2e": "npm run test:vertical-slice",
-    "package": "npm run build && npm run subscriber:build && npm run native:build -- --release && node scripts/build-bridge.mjs && npm run publisher:bundle && electron-builder --win nsis",
+    "assets:build": "node scripts/build-icons.mjs",
+    "notices:build": "node scripts/build-notices.mjs",
+    "package": "npm run build && npm run assets:build && npm run subscriber:build && npm run native:build -- --release && node scripts/build-bridge.mjs && npm run publisher:bundle && npm run notices:build && electron-builder --win nsis && node scripts/checksum-release.mjs",
+    "test:package": "node scripts/smoke-package.mjs",
     "rust:fmt": "cargo fmt --all --check",
     "rust:clippy": "cargo clippy --workspace --all-targets -- -D warnings",
     "rust:test": "cargo test --workspace"
@@ -39,9 +48,12 @@
     "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
-    "electron": "^44.9.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "png-to-ico": "^3.0.2",
+    "playwright-core": "^1.56.1",
+    "electron": "^44.9.3",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
     "fast-check": "^4.10.2",
@@ -49,7 +61,8 @@
     "tsx": "^4.20.6",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
-    "vitest": "^2.1.8"
+    "vitest": "^5.0.5",
+    "vite": "^8.3.5"
   },
   "build": {
     "appId": "org.aacpipe.publisher",
@@ -62,6 +75,10 @@
       "dist/apps/publisher/native/aacpipe_win32_native.node",
       "apps/subscriber/public/**/*",
       "apps/subscriber/dist/subscriber.js",
+      "apps/subscriber/dist/manage.js",
+      "build/icon.png",
+      "LICENSE",
+      "dist/THIRD-PARTY-NOTICES.txt",
       "package.json"
     ],
     "asar": true,
@@ -76,9 +93,12 @@
     ],
     "win": {
       "target": "nsis",
+      "icon": "build/icon.ico",
       "signExecutable": false
     },
     "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
       "oneClick": false,
       "perMachine": false,
       "allowElevation": false,

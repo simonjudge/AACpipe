@@ -1,571 +1,908 @@
-# **AACpipe Protocol Specification (v0.1)**
+# AACpipe Protocol Specification
 
-**Status:** Local-Only / Serverless Architecture  
-**Target Audience:** AAC Developers, System Architects, & Open-Source Maintainers
+**Status:** Design draft, revision 0.2; not an implemented or frozen standard
 
-1. ## **Overview and Architecture**
+**Wire major version:** 2
 
-The AACpipe framework defines an open, local-first real-time communication pipeline between an Augmentative and Alternative Communication (AAC) device acting as a **Publisher Host** and one communication partner display per channel acting as a **Subscriber**. The protocol delivers real-time updates as the user composes messages—serving as a low-latency remote "Partner Screen". The model is intentionally designed to be extensible to multiple simultaneous subscribers in the future.
+**Audience:** Independent AAC application, partner application and device implementers
 
-**Serverless Peer-to-Host Design:** There are no external servers or relays used. The Publisher daemon embedded on the AAC device hosts both the HTTP web server (serving the subscriber single-page app) and the WebSocket communication server locally on the local network.
+**Updated:** 2026-10-22
 
-The initial protocol intentionally prioritizes a zero-install local experience over strong active-attack resistance.
+> This document describes a proposed wire-2 protocol. The current Windows/Grid 3
+> preview implements legacy wire 1, not this draft. Editing this specification
+> does not upgrade that implementation. See Appendix B for known differences.
+> Independent interoperability, fixed test vectors and physical-device testing
+> are release gates, not claims made by this document.
 
-**In other words - this is NOT A SECURE system - someone might be able to see your messages**
+## 1. Purpose, scope and conformance
 
-**You could consider this in the same way as thinking about a verbal conversation - someone nearby (even just outside your house) might be able to hear a conversation you are having. If you have the conversation in a public place (on a public network in this analogy) it is much easier for someone to listen in. Assume anything you say on this system could be intercepted by someone malicious.**
+AACpipe connects an AAC user's authoritative composition to a communication
+partner's application or device. It supports live partner displays and optional
+partner contributions without transferring control of the AAC user's message.
 
-This is appropriate for a first deployment on a trusted local network or the AAC device’s own hotspot. The protocol is designed to allow a more secure deployment mode later, using mutually authenticated HTTPS/WSS and stronger device identity or certificate pinning without changing the core channel model.
+The protocol defines observable messages and behaviour. It does not require a
+particular operating system, programming language, application architecture,
+AAC product, user interface, executable, clipboard integration or storage API.
+A Publisher may be part of an AAC application, a separate service or a hardware
+device. A Subscriber may be a browser, native application or dedicated receiver.
 
-Inspired by Meredith Ringel Morris’ research on partner apps, AACpipe can be extended to support bidirectional interaction where trusted partners contribute word completions, predictions, and contextual hints without compromising the AAC user’s conversational agency.
+The terms **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** describe
+requirements. SHOULD-level deviations require a documented reason. Sections
+1-12 are normative draft requirements; Appendices A-C are informative.
 
-Initially the protocol will be used to transmit and render text, but the protocol can also be extended to include symbol support.
+### 1.1 Specification layers
 
-The protocol could also be deployed on a stand-alone partner screen.
+| Layer | Defines |
+| --- | --- |
+| Core | Authority, channels, credentials, sessions, content lifecycle, negotiation and extension rules. |
+| Transport profile | Discovery, pairing, endpoint, framing, authentication, liveness and transport-specific errors. |
+| Application profile | A useful interoperable role, with mandatory capabilities and limits. |
+| Optional capability | Additional messages and behaviour, enabled only by negotiation and authorization. |
+| Implementation guidance | Examples of integrations, storage, rendering and packaging; not conformance requirements. |
 
-### **Design Constraints for v0.1**
+This draft defines the `local-websocket-v2` transport, `text-display` and
+`suggestions-partner` application profiles, and the capabilities in sections 8-9.
+A conformance claim MUST identify wire major, transport profile, application
+profile(s), role and implemented capabilities. "AACpipe compatible" without
+that information is insufficient.
 
-- **Primary priority:** zero-install, low-friction pairing.
-- **Initial release target:** Windows only. Grid 3 integrates by launching a short-lived AACpipe command-line bridge, with the message text passed on the Windows clipboard and the intent passed as a command flag.
-- **Initial channel model:** one partner per channel, content-read-only, extensible to future multi-partner support. The Subscriber may send protocol-control frames required for authentication, heartbeat, and capability negotiation, but cannot submit AAC content or commands.
-- **Initial network model:** trusted home Wi-Fi or the AAC device’s own hotspot; not intended for arbitrary public Wi-Fi without extra trust controls.
-- **Persistent sessions:** pairing credentials persist on both Publisher and Subscriber until the AAC user revokes them. Browser reload and transient connection loss do not require another QR scan.
-- **Content clearing:** the AAC user can clear the current message and all retained channel content without revoking the channel or destroying its pairing credentials.
-- **Connection loss behavior:** on unexpected disconnect, visible text and in-memory message content are cleared immediately. A persistent pairing credential is retained only to permit authenticated reconnection.
+A text-display peer need not implement suggestions. A suggestions-only partner
+need not render or receive composition text. Other transports and profiles MAY
+be specified separately, but are not automatically interoperable with this one.
+Internet relays and authenticated HTTPS bootstrap are not defined by this draft.
 
-1. ### **Components**
+### 1.2 Fundamental requirements
 
-| Component                   | Responsibility                                                                                                                                                                                                                                                                                                                | Implementation Targets                                                                                                                                           |
-| :-------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Publisher Engine & Host** | Long-running resident service. Owns the authoritative composition buffer and channel registry, runs a local embedded HTTP/WebSocket server, hosts static Subscriber SPA assets, manages cryptographic channel keys, renders dynamic QR code pairings, receives local WebSocket connections, and processes encrypted payloads. | Windows background process with a tray UI for the first release; future Node.js / Rust / Go / C\# daemons for wider deployment.                                  |
-| **Command Bridge**          | Short-lived executable launched by the AAC application once per user action. Reads the intent from its command flag and the text from the clipboard, forwards a single command to the resident Publisher over local IPC, then exits. Holds no channel state and never touches the network.                                    | `aacpipe.exe` on Windows, invoked from a Grid 3 cell's "Run program" command.                                                                                    |
-| **Subscriber Web App**      | Zero-install Web Application downloaded directly from the AAC device's local HTTP server. Imports pairing credentials from the initial URL fragment, persists persistent-channel credentials in browser storage, renders distance typography, and clears message content on connection loss.                                  | Pure Single-Page Application (HTML5/TS/JS) served directly over home Wi-Fi or a device hotspot to standard partner mobile browsers (iOS Safari, Android Chrome). |
+- The Publisher is authoritative for each channel's composition and permissions.
+- A partner suggestion MUST NOT modify composition, trigger speech or invoke
+  AAC commands without the AAC user's explicit action through the AAC interface.
+- Content clearing, credential revocation and local forgetting are distinct.
+- Recoverable state MUST be distinguishable from actions with side effects.
+- Failure, unsupported features and unavailable persistence MUST be surfaced;
+  implementations MUST NOT silently claim a capability or guarantee they lack.
+- The defined local transport MUST operate without an internet connection,
+  external account, remote asset download, analytics or cloud service.
 
-2.  ### **Channels**
+## 2. Roles and object model
 
-AACpipe maintains isolated channels for persistent and ephemeral interactions. The AAC user can create independent channels for different partners (e.g., one persistent read-only channel for a primary caregiver, and a temporary read-only ephemeral channel for a store clerk). Each channel utilizes an independent cryptographic secret and explicit permission flags. v0.1 permits one Subscriber credential per channel; a future version may associate multiple independently revocable Subscriber credentials with one logical channel.
+| Term | Meaning |
+| --- | --- |
+| AAC user | The person whose composition is shared and who controls authorization. |
+| Publisher | The authority for channel state, partner authorization and accepted suggestions. |
+| Subscriber | An authenticated partner peer; its name does not imply content-read-only access. |
+| Channel (`cid`) | A logical sharing context with its own authoritative view and lifecycle. |
+| Credential (`kid`) | A revocable pairing secret and its policy, belonging to one channel. |
+| Session (`sid`) | One authenticated connection using a credential; never a durable pairing. |
+| Generation (`generation`) | A content-lifecycle identifier delimiting which state, suggestions and actions remain applicable. |
+| Revision (`revision`) | A content-state counter within one channel generation, distinct from frame sequence. |
 
-|                          | Persistent Channel (type: "p")                                                                                                                                                                                                                                                                   | Ephemeral Channel (type: "e")                                                                                               |
-| :----------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
-| **Target Use Case**      | Family, primary caregivers...                                                                                                                                                                                                                                                                    | Cashiers, one-off encounters.                                                                                               |
-| **Lifespan**             | Indefinite. Publisher and Subscriber pairing records persist across AAC app restarts, browser reloads, and transient disconnections until explicitly revoked by the AAC user, subject to the browser-storage limitations below.                                                                  | Ends on WebSocket disconnect, a user-configured connected-idle timeout (default: 30 minutes), or manual closure.            |
-| **Revocation Mechanism** | Explicit "Reset Key / Revoke Session" trigger in Publisher management UI.                                                                                                                                                                                                                        | Connected-idle timeout, socket disconnection, or manual cancellation action. Browser page-exit signals are not relied upon. |
-| **Default Permissions**  | Read-Only (prm: "ro") in v0.1; future read-write with explicit permission gating.                                                                                                                                                                                                                | Read-Only (prm: "ro") by default.                                                                                           |
-| **Storage Profile**      | Publisher credential is persisted in the Windows user’s protected application storage. Subscriber credential is persisted in origin-scoped browser storage. Message content is never persisted by the Subscriber. Clearing channel content preserves both credentials; revocation destroys them. | Publisher and Subscriber credentials are held in memory only and wiped on disconnect, timeout, or manual closure.           |
-| **Addressing Endpoint**  | `http://aacpipe.local:8080/#2:{channelId}:{base64Key}` (WebSocket handshake: `ws://aacpipe.local:8080/?cid={channelId}`)                                                                                                                                                                         | `http://aacpipe.local:8080/#0:{channelId}:{base64Key}` (WebSocket handshake: `ws://aacpipe.local:8080/?cid={channelId}`)    |
+Channels MAY mirror a common AAC source or expose different views. They need
+not use separate internal buffers, processes or databases. Revisions from
+different channels are not comparable.
 
-> **v0.1 permission scope**: The initial release is content-read-only in both persistent and ephemeral channels. Subscriber-to-Publisher authentication and control traffic does not grant permission to submit suggestions, modify the buffer, invoke speech, or issue AAC commands. The protocol supports future write capabilities and partner suggestion payloads, but these are not part of the first implementation.
+Clearing a channel affects that channel's shared content, not necessarily the
+AAC application's source message or other channels. A Publisher MAY offer a
+user action that clears several channels; it MUST apply each channel's clear
+barrier independently. Its interface MUST explain the scope.
 
-3. ### **States and Event Types**
+A channel MAY have multiple independently revocable credentials. Sharing one
+credential between partners does not create independently identifiable partners.
+Each credential permits **one active session** in this profile. A second
+connection MUST first authenticate; if an active session still exists, the
+Publisher MUST reject the new session as busy without displacing the old one.
+Unauthenticated connections MUST NOT reserve the active-session slot.
 
-| Event Type      | State     | Description                                                                                                     | Purpose / Trigger                                                                                                 |
-| :-------------- | :-------- | :-------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
-| STATE\_UPDATE   |           | Publisher → Subscriber                                                                                          | Transmits real-time composition changes, buffer text, and speaker status.                                         |
-|                 | IDLE      | The authoritative Publisher buffer is empty without an explicit clear event, including the initial empty state. | Displays the connected empty-state UI. It does not expire a channel by itself.                                    |
-|                 | COMPOSING | The AAC application appends a word or replaces the message, via a `--word` or `--sentence` bridge command.      | Renders active buffer text; displays "User is typing..." indicator.                                               |
-|                 | SPEAKING  | The AAC application signals text-to-speech playback, via a `--speak` bridge command.                            | Animates active message container (e.g., high-contrast pulse/outline) to highlight spoken output.                 |
-| CLEAR\_BUFFER   |           | Publisher → Subscriber                                                                                          | The AAC application issued a `--clear` bridge command, or the user cleared channel content from the Publisher UI. | Clears browser text and all in-memory content state immediately while preserving the persistent pairing and connection. |
-| SYSTEM\_REVOKED |           | Publisher → Subscriber                                                                                          | Signals immediate session key destruction and subscriber disconnection.                                           |
+Labels are optional display metadata, not identity, routing keys or authority.
+Publishers MAY choose their own label uniqueness and localization policies.
 
-> **Connection-loss handling**: When a socket disconnects unexpectedly, the Subscriber must immediately clear the displayed message and all in-memory message state. For a persistent channel, it retains the durable pairing credential, attempts to reconnect and re-authenticate, and does not require another QR scan. It must not redisplay locally cached text. After authentication, the Publisher sends a fresh authoritative state snapshot; the Subscriber displays that snapshot only while the connection remains authenticated. An ephemeral channel deletes its credential on disconnect and cannot reconnect without a new pairing.
+### 2.1 Credential lifetime
 
-> **Ephemeral inactivity**: The connected-idle timeout measures the absence of successful WebSocket heartbeat responses while the socket remains open, not the absence of AAC composition. The Publisher sends a WebSocket protocol ping at a configurable interval shorter than the timeout; a received pong refreshes channel activity. Standard browsers respond at the WebSocket implementation layer. A healthy connected channel therefore does not expire merely because the AAC user pauses composing. Missing the configured heartbeat threshold closes the socket, and disconnection ends an ephemeral channel immediately.
+- **Persistent (`p`):** Stored until explicit revocation, local forgetting or
+  external loss of storage. Normal reload, restart and network loss do not
+  revoke it. Reconnection requires fresh session authentication.
+- **Temporary (`e`):** Not persisted. Ends when its first authenticated session
+  disconnects, the Publisher exits, or the AAC user revokes it. There is no
+  reconnect grace period in this profile. Failed or unauthenticated connection
+  attempts MUST NOT consume it.
 
-4.  ### **Direct Local Dynamic URL Schema**
+An unclaimed temporary credential MAY have a Publisher-local expiry. It MUST
+NOT expire merely because the AAC user pauses composition while its session is
+healthy. A separate future extension may define explicit reconnect leases.
 
-**Direct Host Targeting:** Scanning the QR code points the partner browser directly to the AAC device's embedded HTTP server without querying external DNS or internet routes.
+Revoking a credential MUST disconnect its sessions and prevent later use.
+Closing a channel MUST revoke all its credentials and discard channel content.
+Deleting a Subscriber's local pairing record does not revoke the Publisher's
+credential. Publishers SHOULD provide an AAC-user-controlled revocation method.
 
-When a channel is created, the Publisher resolves its local IP address or local mDNS hostname (e.g., 192.168.1.45 or aacpipe.local) and generates a 256-bit channel secret (${K}_{c}$) used as key material. The pairing QR code encodes a direct local URL.
+## 3. Common encoding and bounds
 
-To maximize QR scan reliability across distances and under poor lighting, the dynamic URL utilizes a compact positional format in the location fragment (\#):
+All protocol messages are UTF-8 JSON objects. Duplicate object member names,
+invalid UTF-8, unpaired Unicode surrogates and non-finite numbers are invalid.
+JSON whitespace and object member order have no semantic significance.
+Cryptographic transcripts use the binary encoding in section 6, not JSON
+serialization or a library's default object ordering.
 
+Every handshake, encrypted envelope and decrypted event contains `"v": 2`.
+Handshake messages use `type`; encrypted events use `eventType`.
+
+| Field/type | Encoding and limit |
+| --- | --- |
+| `cid`, `kid`, `sid`, `generation`, `eventId`, `submissionId`, `suggestionId` | Independent CSPRNG-generated 16-byte identifiers, canonical unpadded Base64URL, exactly 22 characters. IDs are opaque, case-sensitive and not secrets. |
+| Channel credential secret | 32 CSPRNG bytes, canonical unpadded Base64URL, exactly 43 characters. |
+| Handshake nonces | 16 CSPRNG bytes, canonical unpadded Base64URL, exactly 22 characters. |
+| HMAC proof | 32 bytes, canonical unpadded Base64URL, exactly 43 characters. |
+| GCM tag | 16 bytes, canonical unpadded Base64URL, exactly 22 characters. |
+| `seq`, `revision` | Unsigned 64-bit canonical decimal strings: `0` or a nonzero digit followed by digits; maximum `18446744073709551615`. |
+| `ts` | Optional Unix milliseconds, integer 0 through `9007199254740991`; diagnostic only. |
+| Capability, profile, permission or reason name | ASCII `[a-z][a-z0-9.-]*`, 1-96 bytes. |
+| Name lists | At most 32 distinct names; duplicates invalid. |
+| Label | At most 256 UTF-8 bytes. |
+| JSON nesting | At most 16 container levels, counting the outer object as level 1. |
+
+Base64URL uses `A-Z`, `a-z`, `0-9`, `-`, `_`, without padding. Decoders MUST
+reject invalid lengths, nonzero unused trailing bits and noncanonical encodings.
+
+One WebSocket text message carries one JSON frame. Its UTF-8 size MUST NOT
+exceed 65536 bytes. The same limit applies to decrypted JSON; handshake JSON
+is limited to 8192 bytes. Binary messages are unsupported. Limits include
+unknown fields; implementations MUST bound input before expensive processing.
+
+Unknown optional object fields MUST be ignored, subject to these bounds.
+Unknown enum values, missing required fields and invalid field types MUST NOT
+be guessed or silently substituted. An unknown event type is an error unless
+a negotiated extension explicitly defines how to handle it.
+
+`ts` MUST NOT determine order, replay acceptance, authorization or expiry.
+Peers need not have synchronized clocks.
+
+## 4. Application profiles, capabilities and permissions
+
+The core includes session confirmation, heartbeat, errors, content clearing
+and revocation. These are not optional capabilities.
+
+| Application profile | Required active capabilities | Purpose |
+| --- | --- | --- |
+| `text-display` | `state.text` | Receives complete textual composition snapshots. |
+| `suggestions-partner` | `suggestions.submit`, `suggestions.feedback` | Submits independent text candidates and receives lifecycle feedback; no composition-text access implied. |
+
+A Subscriber requests one or both profiles. The Publisher MUST activate every
+requested profile or reject the session as incompatible/unauthorized; it MUST
+NOT silently substitute a different role.
+
+### 4.1 Negotiation is not authorization
+
+- **Offered:** The Publisher implements and offers a capability.
+- **Requested:** The Subscriber implements and asks to activate it.
+- **Granted:** Credential policy and AAC-user consent permit its use.
+- **Active:** The Publisher has confirmed it for this session.
+
+The requested list MUST be a subset of the offered list. The active list MUST
+be a subset of the requested list and MUST satisfy requested profiles.
+Optional requests MAY be declined. All three lists are distinct protocol
+concepts; absence of a capability means it is inactive.
+
+Permissions are separate from implementation support:
+
+| Permission | Authorizes |
+| --- | --- |
+| `composition.read` | Receipt of shared composition text. |
+| `suggestions.submit` | Submission of candidates for AAC-user consideration. |
+
+`state.text`, `state.speaking` and `action.notify` require `composition.read`.
+`state.speaking` and `action.notify` additionally depend on `state.text`.
+The two suggestions capabilities require `suggestions.submit` and MUST be
+activated together. A credential may grant both permissions, either, or neither;
+an application profile still requires its corresponding permission.
+
+There is no generic `rw` permission. No permission in this draft authorizes
+direct edits, forced speech or arbitrary AAC commands. Local receiver opt-in
+for sound is separate from channel authorization.
+
+Changing effective permissions or active capabilities requires closing the
+session and renegotiating. Revoked access MUST NOT wait for voluntary reconnect.
+
+## 5. Local WebSocket transport and pairing
+
+### 5.1 Endpoint and discovery
+
+The `local-websocket-v2` profile uses HTTP and WebSocket on a trusted local
+network or device hotspot. The WebSocket endpoint is:
+
+```text
+ws://{host}:{port}/aacpipe/v2?channel={cid}&credential={kid}
 ```
-http\://{host}:{port}/\#{flag}:{channelId}:{base64Key}
+
+Exactly one `channel` and one `credential` query parameter are required.
+Other query parameters are reserved and MUST be rejected in this version.
+The secret MUST NOT appear in the query, path, HTTP headers or discovery data.
+The host may be a local DNS/mDNS name, IPv4 address or bracketed IPv6 address.
+No port is mandatory; an explicit port is used in pairing examples.
+
+An optional browser receiver is served at `/`. Its pairing URL is:
+
+```text
+http://{host}:{port}/?channel={cid}&credential={kid}#2:{lifetime}:{cid}:{kid}:{secret}
 ```
 
-- **flag (1 Character):** Encodes the requested channel type and permissions into a single numeric bitmask:
-  - 0: Ephemeral, Read-Only (t=e, prm=ro)
-  - 1: Reserved for future Ephemeral, Read-Write (t=e, prm=rw)
-  - 2: Persistent, Read-Only (t=p, prm=ro)
-  - 3: Reserved for future Persistent, Read-Write (t=p, prm=rw)
-- **channelId (17 Characters):** A cryptographically random 96-bit value encoded as fixed-length Base62 (e.g., x7K9pL3mN2qR8TvQa). Encoders preserve leading zero digits so every channel ID is exactly 17 characters.
-- **base64Key (43 Characters):** The 256-bit symmetric key material in unpadded Base64URL format.
+`lifetime` is `p` or `e`. The fragment's version, IDs and lifetime MUST be
+validated; the fragment IDs MUST match the query. Lifetime is a hint, not a
+permission grant. The Publisher confirms authoritative policy after
+authentication. A non-browser peer MAY receive the same pairing fields through
+another trusted local mechanism without downloading a webpage.
 
-The URL flag is a client hint only. The Publisher's channel registry is authoritative for channel type, permission, expiry, and supported capabilities. A modified flag must never elevate a channel's permissions.
+A browser MUST remove the fragment with history replacement as soon as it has
+validated and imported it, without navigating or reloading. The query IDs
+remain so the browser can select a stored credential after reload. If a hint
+conflicts with confirmed lifetime, temporary policy takes precedence: remove
+any persisted copy and require a new persistent pairing if persistence is desired.
 
-> **v0.1 trust model**: This zero-install flow is intentionally optimized for a trusted local network or the AAC device’s hotspot. It is not a claim of strong protection against an active local attacker. A stricter secure mode is planned and should be implemented as an explicit alternative to the zero-install path.
+If a Publisher offers zero-install browser pairing it MUST serve all required
+assets locally, without remote dependencies. How those assets are packaged is
+not specified.
 
-#### **Persistent Subscriber Credential Storage**
+mDNS advertisement is OPTIONAL. An advertising Publisher uses
+`_aacpipe._tcp.local`, its listener's actual port and TXT `v=2`, `path=/aacpipe/v2`.
+Advertisements MUST NOT contain credentials, channel IDs, labels or content.
+Stable collision-resistant hostnames are RECOMMENDED for browser persistence.
+IP fallbacks are permitted. Discovery is neither identity nor authorization.
 
-On the first successful opening of a persistent pairing URL, the Subscriber:
+### 5.2 Storage and deployment trust
 
-1. Parses the channel ID, endpoint, channel type, and channel secret from the URL fragment.
-2. Persists a pairing record containing the protocol version, channel ID, transport profile, endpoint or stable Publisher hostname, channel type, and channel secret in origin-scoped browser storage. IndexedDB is preferred. Where a secure browser context and browser support permit, the secret should be imported and stored as non-extractable cryptographic key material. In the LOCAL profile, the browser may have to store extractable key bytes because Web Crypto is not guaranteed to be available.
-3. Immediately removes the fragment from the visible URL using browser history replacement, without navigating or reloading the page.
-4. Uses the persisted pairing record on browser reload and subsequent reconnections. It must not require the QR code again unless the channel has been revoked or the partner deliberately clears browser site data.
+Persistent pairings MUST use platform-appropriate protected storage where
+available. The wire protocol does not prescribe a storage API. If durable
+storage is unavailable, the Subscriber MUST warn that this device will require
+pairing again; it MUST NOT silently claim persistent local storage.
 
-The Subscriber must not persist composition text, symbols, decrypted payloads, suggestions, or prior state snapshots. It may persist non-sensitive accessibility preferences separately from the pairing record.
+Browser credentials are origin-scoped. Switching between an IP address and a
+hostname may require pairing again. Site-data eviction/private browsing can
+lose credentials without revoking them at the Publisher.
 
-Browser private modes, storage eviction policies, or operating-system deletion of site data may remove the local pairing record; this is an external deletion rather than protocol revocation. The Publisher channel remains valid, but that Subscriber will need the existing channel QR to restore its local credential. A browser that cannot demonstrate durable origin storage must warn that persistent pairing is unavailable rather than silently treating the channel as persistent. Under normal supported-browser operation, reload, tab closure, browser restart, Publisher restart, and transient network loss do not delete a persistent pairing record.
+**LOCAL trust limitation:** After authentic software has loaded, application
+authentication and encryption limit passive content observation and access
+without a credential. HTTP does not authenticate downloaded code. An active
+network attacker can replace that code, steal the credential, forge traffic
+or disrupt pairing. A shared network is not necessarily a trusted network.
+Use only a trusted private network or the AAC device's own trusted hotspot.
+This profile does not claim forward secrecy or protection after secret theft.
 
-Recommended persistent pairing URLs use a stable, per-Publisher mDNS hostname so the browser origin and stored pairing record remain stable across local IP address changes. The illustrative default `aacpipe.local` is suitable only when there is one AACpipe Publisher on the network. An implementation must derive and persist a collision-resistant hostname such as `aacpipe-{deviceId}.local`, handle mDNS collision renaming consistently, and continue advertising the same hostname after restart. Direct-IP URLs remain available as explicitly labelled compatibility fallbacks for both channel types, but cannot promise address stability. Changing between the hostname and an IP address requires scanning the pairing QR again; browser credentials and preferences are origin-scoped and are not migrated.
+An authenticated HTTPS/WSS profile is reserved, not specified here. A future
+profile MUST define trusted bootstrap, Publisher identity and downgrade rules;
+changing URL schemes alone is insufficient. Peers MUST NOT automatically
+downgrade a stored stronger transport profile to LOCAL.
 
-5. ### **mDNS Addressing (aacpipe.local)**
+## 6. Authentication and encrypted framing
 
-- The Publisher daemon advertises its local network service via Multicast DNS as `_aacpipe._tcp.local` and binds to its persisted, collision-resistant per-Publisher hostname. Examples use `aacpipe.local` for readability only.
-- The Windows implementation uses `@homebridge/ciao`, saves its hostname and service name in `discovery.json`, and advertises IPv4 records matching its IPv4 HTTP listener. It monitors network-interface changes and persists conflict-resolved names. TXT records contain only the protocol version and root path, never channel IDs, pairing secrets or messages.
-- Advertising runs independently of Grid command processing. If it fails or is slow, the pairing window explains that IP-address fallbacks remain available. Even successful advertising cannot guarantee name resolution on devices or networks that block mDNS (UDP 5353). The management window stays on loopback, with its existing origin restrictions.
-- **Dynamic Pairing URL:**
+This section defines the proposed `psk-aes256gcm-hkdfsha256-v2` suite. It uses
+standard primitives but is a draft protocol construction, not a claim of
+independent cryptographic review. Section 12's review and vector gates apply.
+No alternative algorithm negotiation is defined in this transport version.
 
-```
-  http://aacpipe.local:8080/#{flag}:{channelId}:{base64Key}`
-```
+### 6.1 Binary encoding
 
-- **Fallback**: If mDNS resolution fails on certain legacy Android or locked-down network configurations, a fallback QR code can use the AAC device's current IPv4 address, for example:
+- `UTF8(s)` is the UTF-8 encoding of the exact string, without normalization.
+- `U32(n)` and `U64(n)` are unsigned 4-/8-byte integers in network byte order.
+- `LP(b) = U32(byteLength(b)) || b`.
+- `T(b1,...,bn) = LP(b1) || ... || LP(bn)`.
+- `L(names) = U32(count) || LP(UTF8(name1)) || ... || LP(UTF8(nameN))`,
+  after sorting unique ASCII names by ascending byte value.
+- `B(field)` decodes a canonical Base64URL field to bytes.
 
-```
-  http://192.168.1.45:8080/#{flag}:{channelId}:{base64Key}`
-```
+All transcript inputs below are bytes; literal strings mean UTF-8 bytes.
+List counts are part of the encoding, so adjacent lists cannot be confused.
+Decimal-string counters are parsed as unsigned integers before U64 encoding.
 
-> **Network requirements**: The v0.1 protocol is for home Wi-Fi or the AAC device's hotspot. It is not designed for arbitrary public Wi-Fi without additional trust controls or a secure authenticated deployment mode.
+### 6.2 Handshake
 
-#### **Transport Security Profiles**
+1. The Publisher sends `CHALLENGE` with fresh `sid` and `serverNonce`,
+   offered capabilities and supported application profiles.
+2. The Subscriber sends `AUTH_RESPONSE` within 10000 ms after the challenge,
+   with a fresh `clientNonce`, requested profiles/capabilities and proof.
+3. The Publisher verifies identity, proof and policy, then atomically claims
+   the credential's active-session slot. A busy credential is rejected only
+   after proof verification.
+4. The first encrypted Publisher event is `SESSION_OPEN` with sequence zero.
+   The Subscriber MUST NOT consider itself authenticated before verifying it.
+   Active capabilities and grants become authoritative only then.
+5. A text session receives a fresh `STATE_UPDATE` immediately afterwards.
+   No historical action or suggestion is replayed.
 
-The channel, authentication, state, clear-content, reconnection, and revocation semantics are independent of the transport security profile:
+The connection moves through pending, proof-verified, active and closed states.
+Each challenge is single-use; another handshake message after activation is
+invalid. Content MUST NOT be sent before activation. A failed proof or malformed
+response closes the connection; it MUST NOT be retried on the same challenge.
 
-- **LOCAL (required by v0.1):** Uses HTTP and WebSocket on trusted home Wi-Fi or the AAC device's own hotspot. Application-layer authentication and encryption protect against accidental access and passive observation after the authentic application has loaded, but cannot protect against an active local attacker replacing the HTTP application or WebSocket endpoint.
-- **SECURE (reserved extension):** Uses authenticated HTTPS and WSS with a trusted Publisher identity. The identity may be provisioned through a trusted installed application, a publicly trusted certificate, or another future bootstrap mechanism. An ordinary zero-install browser must not claim certificate pinning unless its platform provides a trustworthy way to establish that pin.
+Example handshake fields (identifiers and proof are illustrative, not a vector):
 
-Both profiles use the same channel identifiers, pairing lifecycle, permissions, and encrypted application-frame format. A Subscriber that has stored a channel as `SECURE` must reject downgrade to `LOCAL`.
-
-The LOCAL v0.1 Subscriber is an ordinary single-page web application, not an installable PWA: LAN HTTP origins generally cannot register service workers or rely on secure-context-only PWA features. A future SECURE deployment may add installable-PWA behavior without changing the protocol.
-
-6. ### **AES-256-GCM Encrypted Pipeline**
-
-> - **Key Generation:** Keys are generated using cryptographically strong pseudo-random number generators (CSPRNG) via Web Crypto API or native OS libraries.
-> - **Browser Crypto Availability:** HTTP pages on LAN addresses are not secure browser contexts and may not expose Web Crypto `SubtleCrypto`. The LOCAL profile must feature-detect required APIs and, if necessary, use a reviewed cryptographic implementation bundled with the offline application. It must never download cryptographic code at runtime.
-> - **Key Separation:** The QR secret is input key material, not a traffic key. HKDF-SHA-256 derives a dedicated handshake key and fresh Publisher-to-Subscriber and Subscriber-to-Publisher traffic keys. Derivation context includes `AACpipe`, protocol major version, channel ID, connection ID, and direction.
-> - **IV Management:** Each traffic direction uses a fresh per-connection key and a 96-bit IV formed from a derived 32-bit nonce prefix followed by the frame's unsigned 64-bit sequence number in network byte order. Sequence numbers start at zero and increase by one for each encrypted frame. A key and IV pair must never be reused. Sequence exhaustion closes the connection and requires a new handshake.
-> - **Authenticated Envelope:** AES-GCM uses a 128-bit authentication tag. Protocol version, channel ID, connection ID, direction, and sequence number are authenticated as associated data using a specified length-prefixed binary encoding. The IV is derived from the traffic key context and `seq`; it is not transmitted in the envelope. Frames with an invalid tag, duplicate or decreasing sequence, malformed field, or unexpected direction are rejected and the socket is closed.
-> - **URL Fragment Bootstrap (\#):** During initial pairing, key material is delivered in the browser fragment so it is not transmitted in HTTP request headers or logged by the Publisher web server. The Subscriber then imports the credential into the storage profile required by the channel type and immediately removes the fragment from the visible URL. Persistent credentials remain in origin-scoped browser storage; ephemeral credentials remain in memory only.
-> - **No Content Logging:** The Publisher and Subscriber must not log pairing secrets, decrypted composition text, encrypted payloads, or complete pairing URLs.
-
-7. ### **Subscriber Authentication & Selective Channel Routing**
-
-To prevent metadata leakage and unnecessary local bandwidth consumption, the host daemon routes WebSocket frames strictly to authenticated sockets assigned to specific channel IDs.
-
-- **Selective Connection Routing (cid Query Parameter):**  
-  The subscriber initiates the WebSocket connection using the channel ID extracted from the URL fragment:  
-  ws://{host}:{port}/?cid={channelId}  
-  The host daemon parses cid during the HTTP Upgrade request and assigns the unauthenticated socket to an isolated channel pending pool.
-- **Proof-of-Possession Handshake (HMAC-SHA256):**  
-  To reduce unauthorized device connections on the local network, subscribers must prove possession of key material derived from ${K}_{c}$ before encrypted streaming begins. This remains a local-network authorization mechanism for the zero-install flow and is not intended to replace strong transport security in a more protected deployment.  
-  **Step 1 (Server Challenge):** Upon connection, the Publisher generates a cryptographically random 16-byte connection ID and 16-byte server nonce and transmits an unencrypted CHALLENGE frame with its supported capabilities:  
-  JSON { "v": 1, "type": "CHALLENGE", "sid": "VDnRMDsXrMZ5nWmQ7tH6xw", "serverNonce": "c2VydmVyLW5vbmNlLTEyMw", "capabilities": ["content.clear", "state.speaking", "state.text"] }
-
-  **Step 2 (Subscriber Proof):** The Subscriber generates a cryptographically random 16-byte client nonce and selects only capabilities it supports. It computes an HMAC digest using the dedicated handshake key derived from ${K}_{c}$ over the length-prefixed binary encoding of the literal `AACpipe-auth-v1`, connection ID, server nonce, client nonce, channel ID, the Publisher's offered capabilities, and the Subscriber's selected capabilities. Capability names are sorted by ascending UTF-8 byte value before encoding:  
-  $proof=HMAC-SHA256({K}_{handshake},transcript)$
-
-  The subscriber responds within 5 seconds with an AUTH\_RESPONSE frame:
-
-```
-JSON
+```json
 {
-    "v": 1,
-    "type": "AUTH\_RESPONSE",
-    "cid": "x7K9pL3mN2qR8TvQa",
-    "sid": "VDnRMDsXrMZ5nWmQ7tH6xw",
-    "clientNonce": "am9ZQmhxN1NqTTJQbW9Zdw",
-    "capabilities": ["content.clear", "state.speaking", "state.text"],
-    "proof": "8f3b2a1c...\[Base64URL HMAC Digest\]..."
-  }
-```
-
-**Step 3 (Verification & Authorization):** The Publisher computes the expected HMAC.
-
-If valid, the socket status upgrades to AUTHENTICATED and is moved into the active streaming pool for that cid. The negotiated capabilities are the intersection of those offered and selected, further restricted by the Publisher's authoritative channel permissions. `state.text` and `content.clear` are mandatory v0.1 capabilities; authentication fails as incompatible if either is not offered and selected. `state.speaking` is optional. Proofs are compared in constant time. A challenge is single-use, and the unauthenticated pending pool and failed attempts are rate-limited. An unsupported version or incompatible mandatory-capability set closes with 4002. An invalid proof, connection ID, capability selection, or timeout closes with 4003.
-
-After authentication, the Publisher immediately sends a complete authoritative `STATE_UPDATE` snapshot. Reconnection and browser reload use the same handshake and snapshot process as an initial connection. The Subscriber never restores a previous message from local storage.
-
-8. ### **Revocation & Key Invalidation Protocol**
-
-> - **Revocation Payload Dispatch:** The Publisher transmits an encrypted control frame containing eventType: "SYSTEM\_REVOKED".
-> - **Key Destruction and Tombstone:** The Publisher deletes ${K}_{c}$ and the active channel tuple, then persists a non-secret revocation tombstone containing at least the channel ID. This permits a previously paired but offline Subscriber to distinguish revocation from a temporary network failure without retaining the destroyed secret.
-> - **Socket Termination:** The Publisher closes the active WebSocket connection with Close Code 4001 (Unauthorized / Revoked).
-> - **Subscriber Credential Destruction:** Upon receiving the authenticated revocation event or a 4001 close response from the Publisher during a later authentication attempt, the Subscriber immediately wipes on-screen and in-memory message content, deletes the channel's persisted pairing record, stops reconnecting, and displays a locked status screen requiring a new QR code scan. If the Subscriber was offline during revocation, the Publisher matches its channel ID to the tombstone and rejects its next authentication attempt with 4001, causing the same local deletion. In the LOCAL profile, an active attacker can forge network failures or close responses; this denial-of-service risk is part of that profile's documented limitation.
-> - **Clear Content — Not Revocation:** A `--clear` bridge command or the "Clear Channel Content" action clears the Publisher's current buffer and any retained content/history for that channel, then dispatches `CLEAR_BUFFER`. The Subscriber clears all displayed and in-memory content. The Publisher channel tuple, channel secret, Subscriber pairing record, authenticated socket, and permission settings remain valid. No new QR scan is required.
-> - **Persistent Session Recovery:** Persistent channels survive Publisher restarts, browser reloads, browser restarts, tab closure, and transient disconnections. The Subscriber reconnects with its stored pairing credential, repeats authentication, and receives a fresh authoritative state snapshot. It never restores stale text locally. Only explicit revocation—or external deletion of browser site data—removes the persistent Subscriber credential.
-
-9. ### **User Interface & Symbol Standards**
-
-- **Responsive Distance Typography:** Text size must dynamically scale based on string length using viewport units or CSS clamp() to ensure readability from 2 to 6 feet away.
-- **High Contrast Accessibility:** Minimum WCAG AAA contrast ratio compliance for both light (daylight outdoor) and dark (low light indoor) environments.
-- **Extensible Token Pipeline:** While rendering is text-only initially, the Subscriber token parser supports future symbol ID mapping without breaking changes.
-- **Partner Candidate Dock:** Future read-write partner UI controls may render as a discrete bottom sheet or side panel on the AAC interface to avoid obscuring primary vocabulary grids; this is not part of the initial read-only release.
-
-  10. ### **Embedded Asset Serving (100% Offline)**
-
-The AACpipe Publisher binary embeds all single-page app frontend assets (HTML, CSS, JS) directly inside the executable binary (e.g., via rust-embed in Rust, //go:embed in Go, or single-executable bundling in Node.js).
-
-- When a partner scans the QR code, their phone requests the interface directly from the local HTTP daemon running on the AAC device.
-- Internet Dependency: Zero. No CDN calls, no remote web servers, and no external tracking.
-
-  11. ### **Local Networking & Connectivity Modes**
-
-| Network Context             | Connection Setup                                                                                                  | Internet Required?                   |
-| :-------------------------- | :---------------------------------------------------------------------------------------------------------------- | :----------------------------------- |
-| **Home / Known Wi-Fi**      | Both AAC device and partner phone join the same Wi-Fi router. Direct HTTP/WebSocket streaming on local IP subnet. | **No** (Works 100% offline).         |
-| **Outdoors / Mobile**       | AAC user enables Wi-Fi Hotspot on their device. Partner connects phone to the AAC Wi-Fi access point.             | **No** (Cellular data not required). |
-| **School / Public Network** | If router AP Isolation blocks peer LAN traffic, AAC device prompts user to toggle Wi-Fi Hotspot mode.             | **No**.                              |
-
-2. ## **AAC Application Integration (Command Bridge)**
-
-The AAC application does not speak the AACpipe wire protocol. It invokes a short-lived local executable, the **Command Bridge**, once per user action. The bridge translates a single AAC event into a single Publisher command.
-
-This keeps AACpipe decoupled from any particular AAC product: anything that can copy text to the clipboard and run a program can drive a partner screen.
-
-1.  ### **Process Model**
-
-| Role                   | Lifetime                                                | Responsibility                                                                                                                   |
-| :--------------------- | :------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------- |
-| **Resident Publisher** | Long-running, one instance per interactive Windows user | Owns the authoritative buffer, channel registry, keys, revision counter, HTTP/WebSocket server, mDNS advertisement, and tray UI. |
-| **Command Bridge**     | Milliseconds, one process per AAC action                | Parses flags, reads the clipboard, sends one IPC command, reports an exit code, exits. Stateless.                                |
-
-Both roles ship in a single `aacpipe.exe`. Running it with a command flag enters bridge mode; running it with `--host`, or from the Start Menu/startup shortcut, enters resident mode.
-
-The Command Bridge is the **only** supported way for an AAC application to change the buffer in v0.1. The Publisher never scrapes, hooks, or reads the AAC application's UI.
-
-2.  ### **Invocation Model**
-
-A Grid 3 cell performs its normal AAC actions and then runs the bridge. A typical "add word" cell is:
-
-1. Grid 3 writes the word to the message bar (existing behavior).
-2. Grid 3 copies the relevant text to the clipboard.
-3. Grid 3 runs `aacpipe.exe --word`.
-
-The flag — not the clipboard content — determines how the text is interpreted. The same clipboard string means different things under `--word` and `--sentence`.
-
-> **Console window suppression**: The bridge must be built as a Windows GUI-subsystem binary, or otherwise launched without allocating a console. A console window flashing on every selected word would be unacceptable for eye-gaze and switch users.
-
-3.  ### **Command Set**
-
-Exactly one content action (`--word`, `--sentence`, `--clear`) may be supplied per invocation. `--speak` may be supplied alone or after `--word` or `--sentence`. Management commands may not be combined with content commands.
-
-| Command      | Reads clipboard | Effect on authoritative buffer                                                             | Resulting state                         |
-| :----------- | :-------------- | :----------------------------------------------------------------------------------------- | :-------------------------------------- |
-| `--word`     | Yes             | Appends the clipboard text to the existing buffer using the join rules below.              | COMPOSING                               |
-| `--sentence` | Yes             | Replaces the entire buffer with the clipboard text. Authoritative resynchronisation point. | COMPOSING, or IDLE if the text is empty |
-| `--clear`    | No              | Empties the buffer and discards retained channel content. Emits `CLEAR_BUFFER`.            | IDLE                                    |
-| `--speak`    | No              | Leaves the buffer unchanged; marks the current message as being spoken.                    | SPEAKING                                |
-| `--pair`     | No              | Creates a channel and displays its pairing QR code on the AAC screen.                      | unchanged                               |
-| `--revoke`   | No              | Revokes a channel, destroying its credentials per the revocation protocol.                 | unchanged                               |
-| `--status`   | No              | Reports Publisher health for diagnostics. Never prints buffer text or secrets.             | unchanged                               |
-
-**Modifiers**
-
-| Modifier                       | Applies to             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                       |
-| :----------------------------- | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--text "<string>"`            | `--word`, `--sentence` | Supplies text directly instead of reading the clipboard. Intended for testing and for AAC applications that can pass arguments. Takes precedence over the clipboard.                                                                                                                                                                                                                                          |
-| `--persistent` / `--ephemeral` | `--pair`               | Selects channel type. Defaults to `--ephemeral`.                                                                                                                                                                                                                                                                                                                                                              |
-| `--label "<name>"`             | `--pair`, `--revoke`   | With `--pair`, sets the channel label shown in the Publisher UI; labels are unique (case-insensitive) and a label is assigned automatically if omitted. With `--revoke`, selects the channel to revoke by label.                                                                                                                                                                                              |
-| `--all`                        | `--revoke`             | Revokes every channel. `--revoke` requires exactly one of `--label` or `--all`.                                                                                                                                                                                                                                                                                                                               |
-| `--show` / `--hide`            | all                    | Shows or hides the Publisher pairing window after the command (also accepted as `-show` / `-hide`). On its own, only shows or hides the window. `--word`, `--sentence`, `--clear` and `--speak` imply `--hide` unless `--show` is given, so the window never covers Grid 3; a cold start for a hidden command launches the Publisher with its window hidden. Sent over IPC as `"window": "show"` or `"hide"`. |
-| `--timeout <ms>`               | all                    | Overrides the bridge's total deadline. Default 1500 ms.                                                                                                                                                                                                                                                                                                                                                       |
-
-`--speak` sets SPEAKING for a configurable hold period (`speakHoldMs`, default 4000 ms), after which the Publisher reverts to COMPOSING, or to IDLE if the buffer is empty. Any subsequent content command also ends SPEAKING immediately. A dedicated `--speak-end` flag is reserved for a future release.
-
-4.  ### **Buffer Semantics (Append-Only)**
-
-The Publisher holds the authoritative buffer. The AAC application is not required to resend the whole message for every word.
-
-**Word join rules for `--word`:**
-
-- Leading and trailing whitespace in the supplied text is trimmed.
-- If the trimmed text is empty, the command is a no-op and the revision does not change.
-- If the buffer is empty, the buffer becomes the trimmed text.
-- If the trimmed text begins with a character in the non-spacing set `. , ! ? ; : ' ’ ) ] } % ”` the text is appended with no separator.
-- Otherwise, a single space separator is inserted before the text.
-- If the buffer ends with an opening character in `( [ { ‘ “` the separator is suppressed.
-- Runs of whitespace inside the result are collapsed to a single space; the buffer never starts with whitespace.
-
-**Resynchronisation points.** `--sentence` and `--clear` replace the authoritative buffer outright. They are the only commands that correct accumulated divergence.
-
-> **Accepted limitation — buffer drift**: Because appends are trusted, the partner screen reflects the sequence of bridge commands, not the live contents of the AAC message bar. If the AAC user deletes a word, edits text, or accepts a prediction without a corresponding bridge call, the partner screen will show stale or duplicated text until the next `--sentence` or `--clear`. This is an accepted v0.1 trade-off in exchange for a simple, low-latency integration.
->
-> To limit how long divergence persists, any AAC cell that performs a non-append edit — delete word, delete letter, clear, accept prediction, recall a stored phrase — should send `--sentence` with the full message bar rather than `--word`. Speak cells should also send `--sentence` before `--speak`, so every spoken message starts from a known-correct state.
-
-**Limits.** A single `--word` payload is limited to 256 bytes UTF-8. The authoritative buffer is limited to 4096 bytes UTF-8. Clipboard reads larger than 64 KiB are rejected without inspection. If an append would exceed the buffer limit, the Publisher discards the oldest text at a grapheme-cluster boundary, retains the most recent content, and sets the optional `buffer.truncated` flag in `STATE_UPDATE`.
-
-**Update coalescing.** Accepting a bridge command and transmitting a `STATE_UPDATE` are separate steps. The Publisher increments the revision immediately, but applies a short configurable debounce (`updateIntervalMs`, default 50 ms) before sending. If several commands arrive inside that window, or if a Subscriber socket is applying backpressure, the Publisher discards superseded snapshots and sends only the newest buffer state. Because every `STATE_UPDATE` is a complete snapshot, dropping intermediate frames is always safe. `CLEAR_BUFFER` and `SYSTEM_REVOKED` are never debounced or dropped, so content always disappears from the partner screen at the earliest opportunity.
-
-5.  ### **Clipboard Acquisition**
-
-The clipboard is shared, mutable global state, so the bridge treats it defensively.
-
-- **Format:** `CF_UNICODETEXT` only. The bridge must not paste images, files, or rich text.
-- **Timing race:** The AAC application sets the clipboard and launches the bridge as separate steps, and the clipboard may be locked by another process. The bridge retries `OpenClipboard` for up to 500 ms (for example 20 attempts at 25 ms) before failing.
-- **Validation:** Content must be valid UTF-16 convertible to UTF-8. `CR LF` and lone `CR` are normalised to `LF`. Control characters other than `LF` and `TAB` are stripped.
-- **Empty or non-text clipboard:** `--word` and `--sentence` fail with a distinct exit code and leave the buffer unchanged. A failed read must never be interpreted as "clear".
-- **No mutation:** The bridge never writes to, clears, or restores the clipboard. Other AAC workflows depend on it.
-
-> **Privacy note**: Routing message text through the system clipboard means any other application running as the same user can read it. This is inherent to the integration method, not something AACpipe can prevent. It is acceptable because the AAC application already places this text on the clipboard, but it should be stated plainly to users and deployers.
-
-6.  ### **Local IPC Transport**
-
-- **Channel:** A Windows named pipe, message mode, named per user — for example `\\.\pipe\aacpipe.v1.{userSidHash}`.
-- **Access control:** The pipe DACL grants access only to the SID of the user that created it. The pipe is created with `PIPE_REJECT_REMOTE_CLIENTS` so it cannot be reached over SMB from another machine.
-- **Framing:** One UTF-8 JSON request terminated by `LF`, then one UTF-8 JSON response terminated by `LF`. Complete request or response frames above 128 KiB are rejected. This leaves room for the JSON envelope around the maximum 64 KiB sentence text.
-- **Correlation:** Every request contains an `id` of 1–64 ASCII letters, digits, `_`, or `-`. The response echoes the same `id`. Although v0.1 uses one request per connection, the identifier makes timeout diagnostics unambiguous and permits future connection reuse without changing the schema.
-- **Deadline:** The bridge abandons the attempt and exits non-zero once its total timeout elapses, so a wedged Publisher can never block the AAC application.
-
-Example request and response:
-
-```
-{"v":1,"id":"grid3-106","cmd":"word","text":"water"}
-{"v":1,"id":"grid3-106","ok":true,"state":"COMPOSING","revision":"106","channels":1,"subscribers":1}
-```
-
-The IPC schema is internal to the product and versioned by its own `v` field. It is deliberately separate from the wire protocol: changing the bridge does not change what Subscribers parse. Any request may carry an optional `"window": "show"` or `"window": "hide"` field asking the Publisher to show or hide its pairing window after the command; the bridge sends `"hide"` with content commands by default, and a bare `--show`/`--hide` is sent as a `status` request with that field.
-
-7.  ### **Publisher Auto-Start**
-
-If the bridge cannot connect because the pipe does not exist:
-
-1. It acquires a named single-start mutex so that several rapid invocations cannot launch competing Publishers.
-2. It starts the resident Publisher detached, with no visible console; if the command will hide the pairing window (content commands, or `--hide`), the Publisher is started with `--hidden` so the window does not open over the AAC application.
-3. It waits for the pipe to appear, polling until its deadline expires.
-4. It then delivers the original command, so the triggering word or sentence is not lost.
-
-The resident Publisher itself enforces single-instance behavior with a per-user mutex, and exits immediately if another instance already owns it.
-
-Auto-start only makes the Publisher available; it does not create, restore, or reconnect channels, and it never transmits to an unpaired device. A persistent Subscriber reconnects on its own once the Publisher is listening again.
-
-8.  ### **Exit Codes**
-
-| Code | Meaning                                                                                       |
-| :--- | :-------------------------------------------------------------------------------------------- |
-| 0    | Command accepted by the Publisher.                                                            |
-| 2    | Invalid or conflicting arguments.                                                             |
-| 3    | Clipboard unavailable, empty, or not text.                                                    |
-| 4    | Publisher unavailable and auto-start failed within the deadline.                              |
-| 5    | Payload rejected: too large or failed validation.                                             |
-| 6    | Command valid but refused by the Publisher, for example `--revoke` naming an unknown channel. |
-| 1    | Any other failure.                                                                            |
-
-Having no paired channel is **not** an error. The buffer still updates and the command returns 0, so partner-screen pairing can start mid-sentence.
-
-9.  ### **Latency Budget**
-
-A `--word` invocation occurs on the AAC user's critical path and should complete within roughly 100 ms, including process start, clipboard read, and IPC round trip.
-
-> **Implementation risk**: Process startup dominates this budget. A Node.js single-file executable typically starts in tens of milliseconds and may exceed the budget on lower-powered AAC hardware, especially with on-access antivirus scanning. Measure bridge startup on representative hardware early. If the budget cannot be met, implement the bridge as a small native executable while keeping the resident Publisher in TypeScript/Node.js; the IPC contract above makes that substitution possible without protocol changes.
-
-The bridge must never block on network activity. It returns as soon as the Publisher acknowledges the command; encryption and WebSocket delivery happen asynchronously in the resident process.
-
-10. ### **Trust Model for Local Commands**
-
-Any process running as the same Windows user can invoke the bridge or write to the pipe, and can therefore place arbitrary text on the partner screen. AACpipe treats the local interactive user as trusted and relies on Windows user isolation for this boundary; the pipe DACL prevents access by _other_ users and by remote machines.
-
-As hardening, the Publisher should rate-limit commands, validate every field against the documented limits, and ignore malformed requests rather than resetting the buffer. Verifying the calling process image path is a reasonable future addition but is not a security guarantee.
-
-11. ### **Grid 3 Cell Design Guidance**
-
-| Grid 3 cell                 | Recommended command sequence                                                                      |
-| :-------------------------- | :------------------------------------------------------------------------------------------------ |
-| Word / symbol tile          | Existing write action → copy word → `aacpipe.exe --word`                                          |
-| Letter or keyboard key      | Prefer copying the whole message bar → `aacpipe.exe --sentence`                                   |
-| Delete word / delete letter | Copy whole message bar → `aacpipe.exe --sentence`                                                 |
-| Prediction accepted         | Copy whole message bar → `aacpipe.exe --sentence`                                                 |
-| Speak                       | Copy whole message bar → `aacpipe.exe --sentence` → `aacpipe.exe --speak` → existing Speak action |
-| Clear message bar           | `aacpipe.exe --clear` → existing Clear action                                                     |
-| Pair a partner screen       | `aacpipe.exe --pair --ephemeral` or `--pair --persistent --label "Mum"`                           |
-| Stop sharing                | `aacpipe.exe --revoke --all`                                                                      |
-
-Character-by-character typing should not send a bridge command per keystroke. Either send `--sentence` on word completion, or rely on the Publisher's update coalescing described above.
-
-12. ### **Extensibility to Other AAC Software**
-
-The command vocabulary is deliberately product-neutral. Supporting another AAC application requires only that it can run a program with a flag, and the `--text` modifier already allows integrations that pass text as an argument instead of via the clipboard.
-
-Future write-capable releases may add bridge commands that surface partner suggestions to the AAC user. Those commands would remain subject to the AAC agency rules: suggestions arrive in a separate candidate dock and never enter the buffer without explicit user activation.
-
-3. ## **Protocol Message Schemas**
-   1. ### **Unencrypted Handshake Frames (Handshake Phase)**
-
-- **Publisher Challenge:**
-
-```
-  JSON
-  { "v": 1, "type": "CHALLENGE", "sid": "VDnRMDsXrMZ5nWmQ7tH6xw", "serverNonce": "c2VydmVyLW5vbmNlLTEyMw", "capabilities": ["content.clear", "state.speaking", "state.text"] }
-```
-
-- **Subscriber Auth Response:**
-
-```
-  JSON
-  {
-    "v": 1,
-    "type": "AUTH\_RESPONSE",
-    "cid": "x7K9pL3mN2qR8TvQa",
-    "sid": "VDnRMDsXrMZ5nWmQ7tH6xw",
-    "clientNonce": "am9ZQmhxN1NqTTJQbW9Zdw",
-    "capabilities": ["content.clear", "state.speaking", "state.text"],
-    "proof": "eFpLdW13OThzZE40..."
-  }
-```
-
-2. ### **Encrypted Data Frame (Authenticated Phase)**
-
-Transmitted directly over the local WebSocket connection (ws://aacpipe.local:8080), Transmitted strictly to authenticated sockets assigned to `cid` :
-
-```
-JSON
-{
-  "v": 1,
-  "cid": "x7K9pL3mN2qR8TvQa",
-  "sid": "VDnRMDsXrMZ5nWmQ7tH6xw",
-  "seq": "104",
-  "tag": "MTIzNDU2Nzg5MGFiY2RlZg",
-  "payload": "a1B2eFpL...\[Base64 AES-256-GCM Encrypted Payload\]..."
+  "v": 2,
+  "type": "CHALLENGE",
+  "sid": "AAAAAAAAAAAAAAAAAAAAAA",
+  "serverNonce": "AQEBAQEBAQEBAQEBAQEBAQ",
+  "profiles": ["text-display", "suggestions-partner"],
+  "capabilities": ["state.text", "state.speaking", "action.notify", "suggestions.submit", "suggestions.feedback"]
 }
 ```
 
-3. ### **Decrypted State Update Payload (Publisher \-\> Subscriber)**
-
-`STATE_UPDATE` is a complete authoritative snapshot, including immediately after initial authentication or reconnection. It is optimized for immediate text display and extensible to future symbol support. The Subscriber may display it only while the channel remains authenticated:
-
-```
-JSON
+```json
 {
-  "ts": 1718000520120,
-  "eventType": "STATE\_UPDATE",
-  "revision": "104",
+  "v": 2,
+  "type": "AUTH_RESPONSE",
+  "cid": "AgICAgICAgICAgICAgICAg",
+  "kid": "AwMDAwMDAwMDAwMDAwMDAw",
+  "sid": "AAAAAAAAAAAAAAAAAAAAAA",
+  "clientNonce": "BAQEBAQEBAQEBAQEBAQEBA",
+  "profiles": ["text-display"],
+  "capabilities": ["state.text", "state.speaking"],
+  "proof": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}
+```
+
+Derive `handshakeKey` with HKDF-SHA-256 (32-byte output):
+
+```text
+salt = SHA256(T("AACpipe-handshake-v2", B(cid), B(kid), B(sid), B(serverNonce)))
+info = T("AACpipe-v2", "handshake")
+handshakeKey = HKDF(secretBytes, salt, info, 32)
+authTranscript = T(
+  "AACpipe-auth-v2", B(cid), B(kid), B(sid),
+  B(serverNonce), B(clientNonce),
+  L(offeredProfiles), L(offeredCapabilities),
+  L(requestedProfiles), L(requestedCapabilities)
+)
+proof = HMAC-SHA256(handshakeKey, authTranscript)
+```
+
+HKDF arguments above are input key material, salt, info and output length.
+The Publisher MUST verify requested subsets and compare proofs in constant
+time. The endpoint `cid`/`kid`, response IDs and challenge `sid` MUST match.
+
+### 6.3 Traffic keys and envelopes
+
+For each direction `d`, exactly `publisher-to-subscriber` or
+`subscriber-to-publisher`:
+
+```text
+trafficSalt = SHA256(authTranscript)
+trafficKey[d] = HKDF(secretBytes, trafficSalt, T("AACpipe-v2", "traffic", d), 32)
+noncePrefix[d] = HKDF(secretBytes, trafficSalt, T("AACpipe-v2", "nonce", d), 4)
+IV = noncePrefix[d] || U64(seq)
+AAD = T("AACpipe-frame-v2", B(cid), B(kid), B(sid), d, U64(seq))
+```
+
+AES-256-GCM encrypts the exact UTF-8 event JSON with that IV and AAD, using a
+128-bit tag. `payload` contains ciphertext only; `tag` contains the separate
+tag. Both are unpadded Base64URL.
+
+```json
+{
+  "v": 2,
+  "cid": "AgICAgICAgICAgICAgICAg",
+  "kid": "AwMDAwMDAwMDAwMDAwMDAw",
+  "sid": "AAAAAAAAAAAAAAAAAAAAAA",
+  "seq": "0",
+  "payload": "AA",
+  "tag": "AAAAAAAAAAAAAAAAAAAAAA"
+}
+```
+
+This is a structural example, not valid ciphertext for an event.
+Both the decrypted-size bound and the encoded envelope-size bound apply;
+Base64URL expansion does not permit exceeding the outer frame limit.
+
+Each direction starts at sequence zero and MUST receive exactly the next
+sequence, without gaps, duplicates or reordering. Sequence numbers are assigned
+when transmitting, after snapshot coalescing. Sender and receiver MUST verify
+all envelope IDs, version, lengths and bounds. Invalid tags or sequences close
+the connection. A key/IV pair MUST never be reused. Before sequence exhaustion,
+close and perform a fresh handshake; do not wrap the counter.
+
+The first Subscriber encrypted event may be a heartbeat acknowledgement or
+another permitted core/active-capability event, with its own sequence zero.
+An authenticated Publisher confirmation is provided by the encrypted
+`SESSION_OPEN`; it is not proof of trusted HTTP bootstrap.
+
+## 7. Core events and session lifecycle
+
+Unless stated otherwise, fields in event definitions are required. `ts` is
+optional on every event. Each event also requires `v` and `eventType`.
+Direction abbreviations: P = Publisher, S = Subscriber.
+
+### 7.1 SESSION_OPEN (P to S)
+
+```json
+{
+  "v": 2,
+  "eventType": "SESSION_OPEN",
+  "profiles": ["text-display"],
+  "capabilities": ["state.text", "state.speaking"],
+  "permissions": ["composition.read"],
+  "lifetime": "p",
+  "generation": "BQUFBQUFBQUFBQUFBQUFBQ",
+  "revision": "0",
+  "heartbeatIntervalMs": 10000,
+  "livenessTimeoutMs": 30000,
+  "channelLabel": "Partner"
+}
+```
+
+`channelLabel` is optional. Heartbeat values are fixed at 10000 and 30000 for
+this transport version; they are confirmed, not freely negotiated. Profiles,
+capabilities and permissions are unique name lists. Invalid or contradictory
+grants are a protocol error. Even a suggestions-only peer receives content
+generation/revision context, but not composition text without read permission.
+
+### 7.2 Liveness (P to S and S to P)
+
+Every 10000 ms, the Publisher sends encrypted `HEARTBEAT` containing current
+`generation` and `revision`, even if composition has not changed. A Subscriber
+answers with `HEARTBEAT_ACK` and `heartbeatSeq`, the sequence of the received
+Publisher envelope. No content or permissions are conveyed by the ACK.
+The Publisher accepts only an ACK for a sent heartbeat, once, within the
+30000 ms liveness window.
+Heartbeat context MUST reflect the Publisher's state at its transmission point
+in the ordered event stream. Its generation MUST match the latest announced
+generation, and its revision MUST NOT decrease within that generation.
+It provides context, not a replacement composition snapshot.
+
+The Subscriber clears content and closes if it has received no valid
+authenticated Publisher event for 30000 ms. The Publisher closes if no valid
+heartbeat ACK has arrived for 30000 ms, measured initially from session
+activation. Timeouts use local monotonic elapsed time.
+
+WebSocket ping/pong MAY supplement this mechanism but does not replace it:
+browser JavaScript cannot directly observe those control frames. Other traffic
+does not excuse the Publisher from sending heartbeats.
+
+On detected disconnect, failed authentication, liveness expiry or suspension
+that prevents reliable freshness monitoring, the Subscriber MUST immediately
+remove shared content and cancel pending content-derived actions. A resumed
+Subscriber MUST clear before rendering, reconnect and obtain fresh state.
+This is a detection requirement, not a promise to execute code while a device
+or browser is suspended.
+
+Persistent Subscribers SHOULD reconnect with exponential backoff and jitter
+(initial delay 500 ms, maximum 30000 ms recommended). Busy is retryable.
+Temporary Subscribers MUST discard their credential on authenticated session
+loss. They MUST NOT reconnect automatically with it.
+
+### 7.3 CLEAR_BUFFER (P to S)
+
+Required fields: `generation`, `revision` (always `"0"`), `reason`.
+
+Clearing replaces the channel generation with a fresh random ID, resets its
+revision to zero and makes composition empty/IDLE. The event is a barrier:
+
+- The Publisher discards older pending snapshots, suggestions and actions.
+- The Subscriber removes all channel content and pending derived work.
+- Old-generation submissions MUST NOT be applied to the new generation.
+- All active credentials receive the barrier, even without text capability.
+- Credentials, permissions and authenticated connections remain valid.
+
+A text-capable session next receives the new empty `STATE_UPDATE` before
+further text state or action notifications. A repeated clear creates another
+generation. A reconnect snapshot is sufficient to establish the latest state;
+an offline peer need not receive every earlier clear.
+
+### 7.4 SYSTEM_REVOKED (P to S)
+
+Required field: `reason`, normally `user-revoked` or `channel-closed`.
+The Publisher SHOULD send this authenticated event before closing with 4001,
+but revocation MUST take effect even if delivery fails. On receipt, the
+Subscriber clears content, deletes the credential and stops reconnecting.
+
+For offline credentials, the Publisher MAY retain bounded non-secret
+tombstones and close later attempts with 4001. Unknown/deleted credentials
+may instead fail before authentication. HTTP rejection, missing tombstones or
+network failure cannot reliably distinguish revocation from unavailability.
+The Subscriber MUST present that ambiguity rather than claim confirmed
+revocation. No tombstone is an indefinite availability guarantee.
+
+In LOCAL, an unauthenticated close code can be forged. A bare 4001 MUST stop
+automatic retries and clear content, but MUST NOT by itself delete a persistent
+credential; offer the partner local forgetting or an explicit retry. Only an
+authenticated revocation or local forgetting confirms credential deletion.
+
+### 7.5 ERROR (either direction)
+
+Required fields: `code` (reason name), `fatal` (boolean).
+Optional `submissionId` correlates suggestion errors. Human-readable content
+and secrets MUST NOT appear in errors. Capability-specific nonfatal errors
+leave the session active. Core schema, authorization, cryptographic or
+unexpected-event failures are fatal and close after clearing local content.
+
+| WebSocket close code | Meaning | Persistent-peer response |
+| --- | --- | --- |
+| 4001 | Revoked/unavailable credential indication | Stop automatic retries; authenticated event required for confirmed deletion. |
+| 4002 | Unsupported version/profile/capability or malformed protocol | Stop automatic retries and explain incompatibility. |
+| 4003 | Authentication/authorization failed | Stop automatic retries; retain credential for explicit recovery. |
+| 4004 | Credential busy | Retry with backoff; do not displace existing session. |
+| 4005 | Liveness timeout | Clear; reconnect with backoff. |
+| 4006 | Rate/resource limit | Clear; retry with backoff. |
+| 1000, 1001, abnormal loss | Normal close, shutdown or network failure | Clear; reconnect unless locally forgotten. |
+
+Before upgrade, malformed endpoints SHOULD receive HTTP 400; unknown credentials
+SHOULD receive 404 and overload SHOULD receive 429 or 503. Those responses MUST
+NOT disclose secrets. A browser may expose only a generic connection failure.
+
+## 8. Composition state, ordering and delivery
+
+`state.text` sends complete authoritative snapshots, not a patch history.
+The Subscriber MUST NOT restore composition from disk, infer omitted text from
+earlier snapshots or show text before session confirmation.
+
+Required `STATE_UPDATE` fields: `generation`, `revision`, `state`, `buffer`.
+`buffer` requires `text` (at most 4096 UTF-8 bytes); optional `truncated` is a
+boolean defaulting to false. `state` is `IDLE`, `COMPOSING` or `SPEAKING`.
+IDLE requires empty text; COMPOSING/SPEAKING require nonempty text.
+
+```json
+{
+  "v": 2,
+  "eventType": "STATE_UPDATE",
+  "generation": "BQUFBQUFBQUFBQUFBQUFBQ",
+  "revision": "12",
   "state": "COMPOSING",
-  "buffer": { "text": "Hello", "truncated": false },
-  "meta": {
-    "channelLabel": "Mom",
-    "battery": 82
-  }
+  "buffer": { "text": "Hello", "truncated": false }
 }
 ```
 
-4. ### **System Revocation Event (Publisher \-\> Subscriber)**
+Within a generation, a changed snapshot MUST have a greater revision.
+Repeated delivery of the same revision MUST represent the same state.
+An initial session snapshot MUST match SESSION_OPEN's generation/revision;
+the Publisher MUST serialize that pair before later changes.
+Revision gaps are valid: superseded snapshots may be coalesced. Receivers MUST
+NOT compare revisions across generations. On counter exhaustion a Publisher
+MUST establish a new generation and invalidate old-generation work.
 
-```
-   JSON
+A generation changes on explicit clear, loss/reset of authoritative state or
+Publisher restart. A restarted Publisher MUST start with empty content and a
+fresh generation; pairing persistence does not imply content persistence.
+The first confirmed state establishes the generation for that session.
+During a session, a generation change MUST be announced by CLEAR_BUFFER.
 
-   {
+`STATE_UPDATE` is the only composition-text message in the base profile.
+The Publisher owns normalization, word joining, truncation and source
+integration. The protocol does not require English punctuation rules or
+whitespace collapse. Text MUST be treated as literal text, not HTML or commands.
+If truncating, do not split Unicode grapheme clusters; set `truncated: true`.
+Language/direction metadata and token rendering require separately defined
+extensions; Unicode bidirectional text must not be treated as markup.
 
-     "ts": 1718000529000,
+`state.speaking` permits SPEAKING snapshots. Without it, the Publisher maps
+SPEAKING to COMPOSING for that session. Speaking state describes current
+Publisher-reported activity, not an instruction to synthesize speech.
+An integration's estimated hold period MUST NOT be represented as verified
+playback timing; interfaces SHOULD make that distinction clear.
 
-     "eventType": "SYSTEM\_REVOKED",
+### 8.1 Queueing and backpressure
 
-     "reason": "USER\_MANUAL\_REVOKE"
+Superseded state snapshots MAY be discarded before encryption. Lifecycle,
+action, error and suggestion events MUST NOT be silently coalesced as snapshots.
+Per-session transmission is ordered; a generation barrier invalidates older
+queued work before assigning subsequent sequence numbers.
 
-   }
-```
+Implementations MUST bound outbound queues. They MUST close a slow session
+rather than allow unbounded memory growth or indefinitely queue a clear/revoke
+behind content. Already-transmitted bytes cannot be withdrawn. After such a
+close, a persistent peer recovers through a new handshake and snapshot.
+No delivery guarantee extends across disconnection.
 
-5. ### **Clear Buffer / Clear Channel Data Event (Publisher \-\-\> Subscriber)**
+## 9. Optional capabilities
 
-```
-   JSON
+### 9.1 Action notifications: `action.notify`
 
-   {
+Dependencies: `state.text`, `composition.read`. Direction: P to S.
 
-     "ts": 1718000529400,
+`ACTION_NOTIFY` requires `eventId`, `generation`, `revision` and `action`.
+`action` is `speech-requested` or `attention-requested`. It refers to the exact
+snapshot already sent on this session; it carries no replacement text.
+Each explicit AAC-user action has a new event ID, including repeated speech of
+identical text. Re-sending the same ID MUST NOT repeat a side effect.
 
-     "eventType": "CLEAR\_BUFFER",
+A Subscriber MUST ignore an action whose context is not its current snapshot,
+or whose ID it has already processed. Actions MUST NOT be retained for replay
+after reconnect or reconstructed from SPEAKING state. Delivery is best effort,
+not exactly once. A Publisher MUST send the referenced snapshot first even
+when that snapshot would otherwise have been coalesced.
 
-     "reason": "USER\_CLEARED\_MESSAGE\_BAR",
+Processed IDs need only be retained while their referenced snapshot is current:
+older-context duplicates are already ineligible. Tracking MUST be bounded;
+if it fills, close with 4006 rather than evict IDs and risk repeating an action.
 
-     "revision": "105",
+Sound, speech and attention effects require local receiver opt-in, default off.
+Support does not guarantee browser audio activation, offline voices, background
+execution or actual speech playback. No partner-to-Publisher action command is
+defined. Suggestions do not grant action authority.
 
-     "cid": "x7K9pL3mN2qR8TvQa"
+### 9.2 Suggestions: `suggestions.submit` and `suggestions.feedback`
 
-   }
-```
+Dependencies: both capabilities active and `suggestions.submit` permission.
+Directions: submission/withdrawal S to P; receipt/outcome P to S.
+No read permission is implied. A suggestions-only peer obtains current context
+from SESSION_OPEN, HEARTBEAT and CLEAR_BUFFER.
 
-`CLEAR_BUFFER` is a content-lifecycle event, not a credential-lifecycle event. On receipt, the Subscriber clears the rendered message and any in-memory content derived from the channel. It must retain the pairing credential and remain connected. `SYSTEM_REVOKED` is the only v0.1 event that invalidates a persistent pairing.
+Suggestions are independent text candidates, not text-range patches or
+instructions to replace, speak or append content automatically. The AAC
+application chooses their presentation and the explicit user-acceptance
+interaction. Any accepted edit is performed by that application and reflected
+through normal Publisher-authoritative state.
 
-6. ### **Versioning, Revisions, and Extension Rules**
+#### Submission
 
-- `v` is the protocol major version. v0.1 uses wire major version `1`. A peer that does not support the offered major version closes with private Close Code 4002 (Unsupported Protocol).
-- New optional JSON fields may be added within wire version 1. Receivers ignore unknown optional fields but reject a message that omits a required field, violates a field type or limit, or uses an unknown value where safe handling is not defined.
-- New optional behavior is enabled only through an authenticated capability name. Receiving an event for a capability that was not negotiated is a protocol error; the receiver clears any displayed content and closes the socket.
-- `seq` and `revision` are encoded in JSON as canonical unsigned 64-bit decimal strings matching `0|[1-9][0-9]*`, with no sign or leading zeroes. Implementations reject values greater than `18446744073709551615`. This avoids precision loss in JavaScript.
-- `revision` is the Publisher's unsigned, monotonically increasing logical content revision for a channel. It increments whenever the current composition state changes or content is cleared. Persistent channels persist their latest revision across Publisher restarts; ephemeral channels retain it only for their lifetime. It is distinct from the per-connection encrypted-frame `seq`.
-- `buffer.text` is required under the `state.text` capability and is limited to 4096 bytes UTF-8. `buffer.truncated` is an optional boolean, defaulting to `false`, set when the Publisher discarded older text to stay within that limit. Subscribers that ignore it still render correct current text.
-- `ts` is Unix time in milliseconds for display and diagnostics only. It is not used for authentication, ordering, replay protection, or expiry.
-- A `STATE_UPDATE` is always a complete snapshot for its revision. This permits reconnection and future clients to recover without applying or retaining a history of text patches.
-- Mandatory v0.1 capability names are `state.text` and `content.clear`; `state.speaking` is optional. Future examples include `symbols.render`, `suggestions.submit`, and `suggestions.feedback`; defining or negotiating a capability does not grant permission to use it. Channel permissions remain authoritative.
+`SUGGESTION_SUBMIT` requires `submissionId`, `generation`, `revision`,
+`ttlMs` and `candidates`. `ttlMs` is an integer 1000-60000, measured from
+Publisher receipt using monotonic time. `candidates` contains 1-5 objects,
+each requiring a unique `suggestionId`, nonempty `text` (at most 256 UTF-8
+bytes) and `kind`, one of `phrase`, `completion`, `alternative`, `hint`.
+Kind describes intent only; even a completion is not automatically inserted.
 
-4. ## **Possible Protocol Extensions**
-
-> **v0.1 scope note**: The following features are future extensions and are not part of the initial Windows + Grid 3 read-only release. The protocol is intentionally structured to support them without breaking the base wire format.
-
-1.  ### **Partner Suggestions**
-
-In accordance with human-computer interaction (HCI) standards in AAC, partner suggestions must **never automatically overwrite, auto-complete, or hijack the AAC user's active composition buffer**.
-
-> 1. **Isolated Suggestion Tray:** When a partner sends a PARTNER\_SUGGESTION payload over a local Read-Write WebSocket connection, the AAC Publisher routes the suggestions to a dedicated candidate dock on the AAC screen without altering the typing area.
-> 2. **Explicit User Confirmation:** The suggestion is appended to the main buffer only when the AAC user explicitly activates it via touch, eye-gaze dwell, or switch scanning.
-> 3. **Feedback Loop:** Acceptance or rejection of suggestions dispatches a SUGGESTION\_FEEDBACK frame to notify the partner application, enabling real-time visual UI cues.
-
-1.  #### **Partner Suggestion Payload (Subscriber \-\> Publisher)**
-
-Sent over collaborative (prm: "rw") channels to suggest completions or predictions without altering the user's buffer directly:
-
-```
-JSON
+```json
 {
-  "ts": 1718000525000,
-  "eventType": "PARTNER\_SUGGESTION",
-  "cid": "x7K9pL3mN2qR8TvQa",
-  "suggestions": \[
+  "v": 2,
+  "eventType": "SUGGESTION_SUBMIT",
+  "submissionId": "BgYGBgYGBgYGBgYGBgYGBg",
+  "generation": "BQUFBQUFBQUFBQUFBQUFBQ",
+  "revision": "12",
+  "ttlMs": 30000,
+  "candidates": [
     {
-      "id": "sug\_01",
+      "suggestionId": "BwcHBwcHBwcHBwcHBwcHBw",
       "text": "sparkling water",
-      "type": "COMPLETION",
-      "confidence": 0.90
+      "kind": "completion"
     }
-  \]
+  ]
 }
 ```
 
-2. #### **Suggestion Feedback Payload (Publisher \-\> Subscriber)**
+Publisher validation and acceptance of a batch are atomic. If its context
+differs from the channel's current generation/revision, reject it as stale.
+A queued candidate expires on **any** composition revision change, generation
+change, TTL expiry, sender disconnect or permission withdrawal.
+This intentionally conservative first extension avoids applying suggestions
+to a different message. A future extension may define less restrictive context.
 
-```
-   JSON
+#### Receipt is not AAC-user acceptance
 
-   {
-     "ts": 1718000526100,
-     "eventType": "SUGGESTION\_FEEDBACK",
-     "cid": "x7K9pL3mN2qR8TvQa",
-     "suggestionId": "sug\_01",
-     "action": "ACCEPTED"
-   }
-```
+`SUGGESTION_RECEIPT` requires `submissionId` and `status`, either `queued`
+or `rejected`. Rejected receipts also require `reason`: `stale-context`,
+`rate-limited`, `queue-full`, `unsupported-kind`, or `id-conflict`.
+Queued means only "available for consideration", not "chosen by the AAC user".
+Malformed messages and missing authorization are fatal protocol errors,
+not success-shaped receipts.
 
-3.  #### **Additional Event Types**
+Each credential may submit at most one new batch per second and have at most
+10 queued candidates. Excess valid requests receive the appropriate rejected
+receipt; persistent flooding may close with 4006.
 
-| Event Type (eventType) | Direction              | Purpose / Trigger                                                                     |
-| :--------------------- | :--------------------- | :------------------------------------------------------------------------------------ |
-| PARTNER\_SUGGESTION    | Subscriber → Publisher | Submits word completions, predictions, or contextual hints from a read-write partner. |
-| SUGGESTION\_FEEDBACK   | Publisher → Subscriber | Reports AAC user action (ACCEPTED, REJECTED, EXPIRED) on partner suggestions.         |
+IDs are scoped to the credential and current session. For each submission ID,
+the Publisher retains its original receipt and outcomes for the session;
+semantic duplicates (same declared fields and candidates, ignoring JSON
+member order/unknown optional fields) return that receipt without creating
+candidates. Reuse with different declared content is `id-conflict`.
+An implementation MAY retain a digest of unambiguously encoded declared
+fields for comparison rather than retaining terminal candidate text.
+Suggestion IDs MUST NOT be reused by another batch in that session.
+Duplicate tracking MUST be bounded. If capacity is exhausted, close with 4006
+before accepting another batch rather than forgetting IDs and accepting a
+duplicate. The capacity is an implementation resource policy, not a fixed
+conversation length. Reconnection starts a new scope and MUST NOT automatically
+resubmit old candidates.
 
-2.  ### **Graphic Symbol Support**
+#### Outcome and withdrawal
 
-Initially the protocol will be used to transmit and render text, but this can be extended to include symbol support.
+`SUGGESTION_OUTCOME` requires `submissionId`, `suggestionId` and `outcome`:
+`accepted`, `dismissed`, `expired`, or `withdrawn`. `expired` additionally
+requires `reason`: `ttl`, `context-changed`, or `cleared`.
+An accepted outcome additionally requires `resultGeneration` and
+`resultRevision`, identifying the authoritative state after the user's action.
+Acceptance need not change composition, for example when acknowledging a hint.
 
-- **Subscriber UI:** Renders high-visibility, large-format distance typography derived from buffer.text.
-- **Payload Extensibility:** A future `symbols.render` capability may add an optional `tokens` array to `STATE_UPDATE`. Tokens can carry fallback text and an optional symbol-set-qualified ID. Subscribers that do not negotiate symbol support continue to render `buffer.text`, so adding symbols does not alter the protocol envelope or break text-only clients.
+`accepted` and `dismissed` describe explicit AAC-user choices. Absence of action
+MUST NOT be reported as rejection by the user. Before processing an acceptance,
+recheck context and expiry. Resolve concurrent expiry/acceptance serially so
+each candidate has at most one terminal outcome.
 
-  # **Reference Host Implementation (Node.js/TypeScript)**
+`SUGGESTION_WITHDRAW` requires `submissionId` and `suggestionId`. An outstanding
+candidate becomes withdrawn. Repeat withdrawal of a terminal candidate returns
+its existing outcome. An unknown ID returns nonfatal ERROR `unknown-suggestion`
+with `submissionId`.
 
-To be added. It should demonstrate, at minimum:
+On acceptance, send that candidate's outcome before the resulting state update;
+expire other pending candidates affected by the change. On clear, send the
+barrier first, then any terminal feedback without content. Old-generation
+terminal feedback is allowed solely to resolve IDs; it MUST NOT restore a
+candidate or composition.
 
-- Resident Publisher: embedded SPA asset serving, mDNS advertisement with a collision-resistant per-Publisher hostname, channel registry, and the authenticated WebSocket pipeline.
-- Command Bridge: flag parsing, defensive clipboard acquisition, named-pipe IPC with a per-user DACL and `PIPE_REJECT_REMOTE_CLIENTS`, Publisher auto-start, and the documented exit codes.
-- Shared: HKDF key derivation, deterministic IV construction, associated-data encoding, and runtime schema validation, together with the cross-implementation test vectors required before any interoperability milestone.
+Receipts/outcomes go only to the originating session. Other partners MUST NOT
+receive suggestion content, partner identity or feedback unless a separately
+authorized extension defines it. On disconnection, discard candidate text and
+pending work; terminal delivery is not guaranteed. Store only IDs/status needed
+and optional comparison digests for session duplicate handling, not a
+conversation or suggestion history.
 
-A measured bridge startup time on representative AAC hardware should be recorded here, since it determines whether the bridge can remain a Node.js binary or must be rewritten natively.
+### 9.3 Symbols and other extensions
+
+Symbol rendering is reserved, not defined by this draft. A future text-display
+extension SHOULD retain `buffer.text` as a fallback and define token ordering,
+symbol-set-qualified identifiers, fallback labels, resource limits, licensing
+and offline asset availability. It MUST NOT require text-only peers to fetch
+unknown URLs or infer token semantics.
+
+A future non-text profile can define different mandatory capabilities without
+changing what `text-display` promises.
+
+## 10. Extension and versioning rules
+
+Wire major 2 is not backward compatible with legacy wire 1. A peer MUST NOT
+interpret one version as the other or fall back silently.
+
+Within a frozen major version:
+
+- Optional object fields may be added without changing existing meanings.
+- New behaviour requires a named capability with explicit schemas, directions,
+  dependencies, permission requirements, limits, errors and lifecycle rules.
+- Unknown offered capabilities/profiles may be ignored; do not request them.
+- A peer MUST NOT send capability events before SESSION_OPEN, without active
+  negotiation, or outside that capability's authorized direction.
+- Capabilities do not grant permissions and MUST NOT redefine core authority,
+  clear barriers or the AAC-user-consent requirement.
+- Incompatible changes require a new capability identifier or wire major.
+
+The standard capability names in this draft form its initial registry.
+Private capabilities MUST use `x.` followed by a reverse-domain namespace,
+for example `x.org.example.symbols-v1`, and comply with the name bounds.
+Publication of a private capability does not make it a standard capability.
+Shared extensions SHOULD publish a stable specification, examples and tests
+before proposing an entry in the maintained protocol registry.
+No formal registry authority or external standards endorsement is implied.
+
+An extension specification MUST describe safe absence/decline behaviour.
+Optional fields MUST NOT smuggle a required operation past negotiation.
+Unknown enum members are not automatically optional fields.
+
+## 11. Privacy, errors and implementation freedom
+
+Publishers and Subscribers MUST NOT persist shared composition, decrypted
+events, candidate text or prior snapshots as protocol history. Pairing metadata
+and non-sensitive accessibility preferences MAY persist. The source AAC
+application's own user-authorized message storage is outside this protocol;
+sharing MUST NOT silently add another archive.
+
+Implementations MUST NOT log secrets, full pairing URLs, composition,
+suggestion text or encrypted payloads. Diagnostics SHOULD report versions,
+redacted error categories and connectivity information without content.
+Labels and stable identifiers can reveal relationships; minimize exposure.
+
+Clearing means removing application-visible state, retained references and
+queued derived work. It is not a promise of forensic erasure from browser
+memory, swap, screenshots, backups or another device. Implementations MUST
+describe such limitations honestly.
+
+Input validation, authentication-attempt limits, handshake deadlines, pending
+connection limits and bounded queues are required. Exact resource policies
+outside specified wire limits are implementation choices; overload MUST be
+explicit, never silently reported as acceptance. One slow partner MUST NOT
+block AAC input processing or unrelated channels.
+
+The following are intentionally not dictated by the protocol:
+
+- How the AAC application sends source updates to its Publisher.
+- Whether a command bridge, direct API or embedded integration is used.
+- Processes, threads, IPC transport, library choices or executable names.
+- Clipboard use, word joining and source-edit resynchronization strategy.
+- Candidate tray layout, typography, themes and interaction modality.
+- Protected-storage API, installation, startup and asset packaging.
+
+Implementers SHOULD provide accessible, user-controlled interfaces, make
+sharing and connection status understandable, and avoid obscuring the user's
+primary AAC interface. Specific distance typography or conformance to an
+accessibility standard belongs in implementation accessibility documentation,
+not a claim that wire conformance guarantees usable presentation.
+
+## 12. Validation and interoperability gates
+
+This draft MUST NOT be described as a frozen interoperable release until:
+
+1. Machine-readable schemas cover all handshake, envelope and event shapes,
+   conditional requirements and bounded values in this document.
+2. All normative JSON examples are checked against those schemas.
+3. Published language-independent known-answer vectors include fixed secret,
+   IDs, nonces, offered/requested lists, exact transcript bytes, derived keys,
+   prefixes, IV, AAD, plaintext, ciphertext, tag and proofs.
+4. Negative vectors cover malformed Base64URL/UTF-8, list-boundary ambiguity,
+   wrong version/identity/direction, replay, overflow and tag tampering.
+5. The handshake/key schedule has independent cryptographic review.
+6. At least two independently written implementations exchange baseline
+   snapshots, clear/reconnect, revocation and suggestion messages successfully.
+7. Lifecycle tests cover busy sessions, failed temporary authentication,
+   loss/restart, monotonic liveness, suspended receivers, slow peers, clear
+   barriers, repeated speech, stale/duplicate suggestions and permission changes.
+8. Supported browser/device/network claims have recorded physical tests,
+   including offline operation and storage loss.
+
+Round trips through shared code are useful tests but do not substitute for
+fixed vectors or independent interoperability. Proposed cryptographic examples
+in this document are not production keys or known-answer vectors.
+
+## Appendix A. Reference Windows/Grid integration (informative)
+
+The legacy preview uses a resident Windows Publisher with a tray/pairing
+interface and a short-lived native `aacpipe-bridge.exe`. Grid 3 copies text,
+then launches the bridge. This is one source adapter, not a wire requirement.
+A different AAC application may publish through a direct API without copying
+text or launching another process.
+
+Useful adapter lessons:
+
+- Prefer authoritative full-text replacement after edits, deletes, predictions
+  and before speech. Append-only word commands can drift from the real buffer.
+- Combining full-text update and a speech request in one local operation
+  avoids ordering races between separate process invocations.
+- Clipboard access is shared, mutable and readable by other same-user
+  applications. Retry locks within a bounded deadline; distinguish read failure
+  from intentional clear; never mutate the clipboard as a side effect.
+- Keep source acknowledgement independent of network delivery. A slow or
+  disconnected partner must not interrupt ordinary AAC use.
+- If using local IPC, authenticate/limit access using platform facilities.
+  IPC schema versioning is independent of wire protocol versioning.
+- UI show/hide flags, startup policy, process suppression and installer paths
+  belong to the adapter's documentation.
+
+The preview supports `--word`, `--sentence`, `--clear`, `--speak`, `--pair`,
+`--revoke`, `--status`, direct `--text`, and window controls. These flags are
+not required of alternative implementations. See the [Grid integration guide](docs/grid3-test-cell-actions.md)
+and [development documentation](docs/development.md) for current usage.
+
+## Appendix B. Legacy preview compatibility (informative)
+
+The previous document combined wire-1 design, Windows requirements and future
+ideas. Neither that document nor this revision should be taken as evidence
+that every described behaviour has been implemented.
+
+| Area | Legacy document/current preview | Proposed wire 2 |
+| --- | --- | --- |
+| Version | Protocol document v0.1, wire `v: 1`. | Design revision 0.2, wire `v: 2`; not implemented. |
+| Pairing | Old document uses numeric `0`/`2`; preview uses `e`/`p` and query `channel`. | Explicit `#2:lifetime:cid:kid:secret` plus matching query IDs. |
+| WebSocket | Old document `/?cid=...`; preview `/ws?channel=...`. | `/aacpipe/v2?channel=...&credential=...`. |
+| Identity | One channel secret and 17-character Base62 channel ID. | Separate channel/credential/session; 16-byte Base64URL IDs. |
+| Negotiation | Three read-only capabilities; no explicit session confirmation. | Authenticated SESSION_OPEN with active profiles, capabilities and permissions. |
+| Cryptography | Legacy HKDF/transcript; shared implementation supplies details absent from prose. | Explicitly different v2 transcript/key schedule; new vectors/review required. |
+| Decrypted events | Original examples omit `v`; preview schemas require it. | `v: 2` required at all three layers. |
+| Restart | Saved revision with empty restored composition. | Fresh content generation, empty state, revision zero. |
+| Liveness | Preview server WebSocket ping every 20 seconds. | Observable encrypted heartbeat/ACK and 30-second timeout. |
+| Revocation | Old text promises offline tombstone recognition; current upgrade path rejects missing channels before that handshake. | Confirmed revocation distinguished from ambiguous pre-authentication failure. |
+| Speech | SPEAKING transition with estimated hold; receiver infers optional announcement. | State separate from identified, opt-in, non-replayed action notifications. |
+| Suggestions | Future sketch only; preview rejects content after authentication. | Optional specified submission/receipt/outcome lifecycle, not direct editing. |
+
+Migration requires deliberate implementation work and new pairing credentials;
+existing wire-1 secrets/URLs MUST NOT be reinterpreted as wire 2. A product MAY
+run separately identified legacy and v2 endpoints during transition, but must
+not imply identical guarantees or silently downgrade.
+
+Existing implementation guidance and acceptance status remain in the
+[implementation plan](implementation_plan.md), [README](README.md) and
+[acceptance record](docs/acceptance-tests.md). In particular, desktop automation
+does not establish physical Grid, phone or hotspot compatibility.
+
+## Appendix C. Decisions recorded for this revision (informative)
+
+The following policies were confirmed during the protocol review:
+
+- Introduce draft wire major 2; label the current implementation legacy wire 1.
+- Give each channel its own authoritative view; mirroring is permitted.
+- Separate a small core, transport/application profiles and optional features.
+- Move Windows, Grid and UI prescriptions to implementation guidance.
+- Define an optional interoperable text-candidate suggestions extension.
+- End temporary pairings on authenticated disconnect, with no base grace period.
+- Reject a second authenticated session as busy rather than displacing the first.
+- Separate speech/attention actions from snapshots; require local sound opt-in.
+- Match suggestions to exact revisions; expire them on any revision change.
+- Delete persistent credentials only on authenticated revocation or local
+  forgetting, not an unauthenticated network indication.
+
+Consequences include new implementation/migration work, re-pairing for v2,
+possible busy waits until stale-session timeout, and new pairing after a
+temporary receiver reload. These are explicit policy choices, not accidental
+side effects. Wire-level proposals in this draft remain subject to the
+validation gates in section 12 before freezing.

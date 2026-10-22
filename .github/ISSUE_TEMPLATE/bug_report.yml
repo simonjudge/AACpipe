@@ -1,0 +1,34 @@
+name: Bug report
+description: Report an AACpipe preview problem without sharing private messages or QR codes.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach pairing QR codes, pairing URLs, secrets, or real conversation text.
+        For security vulnerabilities use SECURITY.md, not a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: AACpipe version
+      placeholder: 0.1.0-preview.1
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Device and network
+      description: Windows/Grid version, partner phone/tablet and browser versions; home Wi-Fi or Windows hotspot; .local or IP fallback. Do not include passwords or pairing links.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps, expected result and actual result
+      description: Use invented sample text, never private conversations.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Safe diagnostics
+      description: Paste Copy diagnostics from the pairing window. Review it first.

@@ -1,3 +1,5 @@
 !macro customUnInstall
-  RMDir /r "$LOCALAPPDATA\AACpipe"
+  ${ifNot} ${isUpdated}
+    RMDir /r "$LOCALAPPDATA\AACpipe"
+  ${endIf}
 !macroend

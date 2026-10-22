@@ -1,0 +1,24 @@
+{
+  "type": "gridset-cell-changer-schema",
+  "version": 1,
+  "name": "AACpipe Clear cells",
+  "description": "Adds command to clear to all cells that clear workspace.",
+  "changes": [
+    {
+      "tool": "add-commands",
+      "criteria": {
+        "commandIds": [
+          "Action.Clear"
+        ],
+        "contentTypes": [],
+        "insertedText": "",
+        "caption": "",
+        "includeGrids": "",
+        "excludeGrids": ""
+      },
+      "commands": "<Command ID=\"Action.Copy\"/>\n<Command ID=\"ComputerControl.Run\">\n<Parameter Key=\"FileName\">%PROFILE%\\AppData\\Local\\Programs\\AACpipe\\aacpipe-bridge.exe</Parameter>\n<Parameter Key=\"Arguments\">--clear</Parameter>\n<Parameter Key=\"AllowSwitchTo\">1</Parameter>\n<Parameter Key=\"RunCommandType\">Program</Parameter>\n</Command>",
+      "position": "end",
+      "skipExisting": true
+    }
+  ]
+}

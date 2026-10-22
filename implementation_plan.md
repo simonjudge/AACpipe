@@ -1,11 +1,38 @@
 # AACpipe Implementation Plan
 
-**Plan status:** Runnable local-network MVP, unsigned Grid 3 test package and stable mDNS hostname implemented. Physical phone/hotspot interoperability and pilot-release work remain.<br>
-**Target release:** v0.1 Windows / Grid 3<br>
+**Plan status:** First-public-preview polish implemented; installer and packaged smoke validation prepared. Physical phone/hotspot and clean-VM install lifecycle acceptance remain release gates.<br>
+**Target release:** v0.1.0-preview.1 Windows / Grid 3<br>
 **Last updated:** 2026-10-21<br>
 **Protocol source:** [AACPipe Partner Screen App Protocol.md](./AACPipe%20Partner%20Screen%20App%20Protocol.md)
 
 **Current gate:** Do not begin further product work until the test package has been tried with Grid 3 and the results reviewed.
+
+### First public preview preparation
+
+- [x] MIT licence (attribution and commercial use allowed), original icon,
+      version/author/About, user-first README and privacy/security guidance.
+- [x] Recommended QR with collapsed named-adapter IP alternatives, Copy link,
+      refresh and privacy-filtered diagnostics.
+- [x] Management now requires a random Electron-provisioned capability in
+      addition to loopback, CSRF token and Origin verification. An ordinary
+      local browser is deliberately not authorized.
+- [x] Updated Electron/test/build dependencies; production npm audit is clean.
+      Eight moderate build-tool advisories remain documented and must be
+      rechecked before publication.
+- [x] Generated third-party notices, installer SHA-256 and Windows package/smoke
+      artifact workflow; no automatic publication or repository visibility changes.
+- [x] Future-preview upgrade data preservation; older 0.1.0 uninstallers may
+      still reset data on the first upgrade.
+- [ ] Maintainer physical Grid/phone/hotspot and clean-VM lifecycle testing.
+- [ ] Enable/verify private security reporting when making the repository public.
+- [x] Maintainer approved Simon Judge, blue speech-bubble artwork and clearly
+      labelled unsigned preview; physical testing deferred by choice.
+- [ ] Explicit publication approval.
+
+The maintainer accepted trusted-network-only preview scope after review of
+the HTTP bootstrap attack; authenticated HTTPS/WSS/bootstrap is a gate before a
+broader supported release. See [review](docs/security-review.md),
+[acceptance](docs/acceptance-tests.md) and [release checklist](docs/release-checklist.md).
 
 This is the working delivery plan for AACpipe. Update it throughout development:
 

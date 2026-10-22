@@ -1,0 +1,29 @@
+{
+  "type": "gridset-cell-changer-schema",
+  "version": 1,
+  "name": "AACPipe Sentence Cells",
+  "description": "Set all cells in a gridset to send the AACpipe commands to speak sentence.  This is added to all punctuation, space word prediction and chat history cells.",
+  "changes": [
+    {
+      "tool": "add-commands",
+      "criteria": {
+        "commandIds": [
+          "Action.Punctuation",
+          "Action.Space"
+        ],
+        "contentTypes": [
+          "AutoContent/WordList",
+          "AutoContent/Chat.History",
+          "AutoContent/Prediction"
+        ],
+        "insertedText": "",
+        "caption": "",
+        "includeGrids": "",
+        "excludeGrids": ""
+      },
+      "commands": "<Command ID=\"Action.Copy\"/>\n<Command ID=\"ComputerControl.Run\">\n<Parameter Key=\"FileName\">%PROFILE%\\AppData\\Local\\Programs\\AACpipe\\aacpipe-bridge.exe</Parameter>\n<Parameter Key=\"Arguments\">--sentence</Parameter>\n<Parameter Key=\"AllowSwitchTo\">1</Parameter>\n<Parameter Key=\"RunCommandType\">Program</Parameter>\n</Command>",
+      "position": "end",
+      "skipExisting": true
+    }
+  ]
+}

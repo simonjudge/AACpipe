@@ -154,3 +154,32 @@ button.danger {
   font-weight: 600;
   color: #0a6b2d;
 }
+
+summary {
+  cursor: pointer;
+  min-height: 2.75rem;
+  padding: 0.5rem 0;
+  font-weight: 600;
+}
+
+footer {
+  margin-top: 2rem;
+  border-top: 1px solid #666;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preview {
+  border-left: 4px solid #b00020;
+  padding-left: 1rem;
+}
+
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 3px;
+}
