@@ -70,8 +70,9 @@ nearby, or outside your house, but theoretically worse if someone has hacked int
 ### Optional OCR integration
 
 An experimental [standalone OCR companion](docs/ocr.md) can read a fixed-layout
-AAC message bar without clipboard access. Select text bands **below graphic
-symbols**, calibrate the empty message, and share stable text changes through
+AAC message bar without clipboard access. Drag around the whole chat area
+(graphic symbols are ignored), calibrate the empty message, and share stable
+text changes through
 the existing bridge. It runs separately from AACpipe and must not run alongside
 other content-producing Grid/direct integrations. See the guide for build,
 setup, privacy and capture limitations.

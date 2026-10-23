@@ -2,7 +2,8 @@
 
 The optional Windows x64 OCR companion runs as **aacpipe-ocr.exe**, independently
 of the Publisher/Electron process. It captures a selected AAC application window,
-recognises selected text bands locally with Tesseract, and sends changed,
+recognises the text in a selected chat area locally with Tesseract (ignoring
+graphic symbols), and sends changed,
 authoritative sentence snapshots through **aacpipe-bridge.exe**. It never uses
 the clipboard, sends speech events, or changes the AAC application.
 
@@ -39,35 +40,56 @@ The English model is bundled. For other languages, supply compatible
 select their Tesseract names, e.g. `eng+fra`. Language downloads are an explicit
 installation step; the running companion never downloads models.
 
-## Set up a message bar with symbols above its text
+## Set up a message bar with symbols
 
 1. Start AACpipe and pair the partner normally.
 2. Disable Grid/direct **content-producing** bridge actions. Pairing, status and
    management commands can remain. OCR must be the only composition writer.
 3. Open the AAC app in its intended fixed-size layout. Select that window in
    OCR setup and click **Capture / recalibrate**.
-4. Drag a rectangle around the **text underneath the symbols**, across the full
-   width where words can appear. Leave the graphic symbols outside it. For
-   multiple rows, draw one band per text row, in reading order. Up to twelve
-   non-overlapping bands are supported; bands are ordered top-to-bottom then
-   left-to-right. Include ascenders/descenders and punctuation, with a little
-   margin, but not the symbol row. Use **Clear text bands** to start again.
+4. Drag **one rectangle around the whole chat area**: every line, symbols and
+   labels included, with a small margin, across the full width where words can
+   appear. Normally a single rectangle is all you need. (Up to twelve
+   non-overlapping areas are supported for split layouts; they are read
+   top-to-bottom then left-to-right.) Use **Clear chat area** to start again.
 5. Clear the AAC message. Click **Calibrate EMPTY text** and confirm that the
-   selected bands contain no text or placeholder. The empty reference is kept
-   only in memory. If a cursor blinks inside the band, choose a band excluding
-   the cursor only if that does not clip text, or test calibration with the
-   cursor in a stable state. Dynamic backgrounds may prevent automatic clearing.
+   selected area contains no text, symbols or placeholder. The empty reference
+   is kept only in memory. A thin blinking text cursor is tolerated. Dynamic
+   backgrounds may prevent automatic clearing.
 6. Choose the updated bridge executable if needed, confirm the single-source
    checkbox, then click **Start / resume sharing**.
 7. Compose and correct some invented messages. The read-only preview shows the
    latest readable text; status distinguishes recognition from bridge delivery.
    Save the profile if desired.
 
-The module **does not identify or translate graphic symbols**. It excludes them
-geometrically. This works when labels occupy predictable horizontal text bands.
-Layouts where symbols overlap text, labels move unpredictably or individual
-words alternate between different heights require a different layout or a
-direct AAC integration. Do not widen bands to include symbols as a workaround.
+### How symbols are ignored
+
+The module **does not identify or translate graphic symbols**; only the text
+labels are shared. On each frame:
+
+1. Pixels that differ from the empty reference are grouped into connected
+   shapes. Shapes much taller than the typical letter (more than 2.2 times the
+   median shape height) are treated as symbols and painted back to the empty
+   background before OCR, so symbol artwork cannot merge with labels.
+2. Tesseract reads the remaining text. Recognised words must be confident,
+   contain a letter or digit and be text-sized; symbol fragments that survive
+   step 1 are dropped. Words are ordered into lines top-to-bottom, then
+   left-to-right.
+3. Any letter-sized mark on a text line that was not recognised is re-read with
+   its neighbouring words as context. If it still cannot be read, the frame is
+   refused rather than silently dropping a word. For English, an isolated
+   upright stroke read as I or l is taken as "I" (the two are identical in many
+   sans-serif fonts). A thin upright stroke after the last word of the bottom
+   line is treated as the text cursor and ignored, so a lone "I" typed as the
+   very last word is shared once the next word appears.
+
+If the area changed but contains no readable text (for example symbols only),
+the last shared text is held and a warning is shown; this never clears the
+partner display. Limitations: labels touching or overlapping their symbol may
+be removed with it; symbols drawn at text size, or mostly made of separate
+letter-sized parts, may be refused as unreadable text; labels much larger or
+smaller than the rest of the text may be ignored. Test with your own symbol set
+and font size.
 
 ## Behaviour and controls
 
@@ -78,8 +100,9 @@ direct AAC integration. Do not widen bands to include symbols as a workaround.
 - Empty requires **both** a match to the calibrated blank pixels and repeated
   confirmation for at least 750 ms. No OCR text, low-confidence recognition or a
   black failed capture is not automatically an empty message.
-- OCR confidence below 65% holds the last shared message and reports a warning.
-  Confidence is an engine heuristic, not a correctness guarantee.
+- A text-sized word with OCR confidence below 60% on a text line holds the last
+  shared message and reports a warning. Confidence is an engine heuristic, not a
+  correctness guarantee.
 - Unchanged text generates no extra content commands. A status probe approximately
   every two seconds checks the bridge and detects unexpected composition
   state/revision changes. This is a safeguard, **not an atomic source lock**:
@@ -101,30 +124,42 @@ direct AAC integration. Do not widen bands to include symbols as a workaround.
 
 ## Capture and layout limitations
 
-Capture uses Windows `PrintWindow` for the explicitly selected client area,
-not a desktop screenshot. This avoids capturing an unrelated foreground window.
-Some GPU-rendered applications do not support this capture method or render
-stale/blank frames; the synthetic test cannot establish compatibility with a
-particular AAC product. **Verify actual live typing and clearing on the intended
-Grid/Mind Express/Communicator version and hardware.** Unsupported targets need
-a future Windows Graphics Capture backend, not an automatic desktop fallback.
+Setup first tries Windows `PrintWindow` for the selected client area, which
+works even if the window is partly covered. Some applications, including
+Grid 3, refuse this ("did not provide a window capture") or return a blank
+frame. The companion then switches to **screen capture** of that window's
+client area for the rest of the session, and the status line says so:
+
+- The OCR window hides itself briefly while capturing during setup, and
+  minimises when sharing starts. Grid is brought to the front for setup.
+- The chosen chat area must stay **visible and uncovered** while sharing. Before
+  and after every frame, a grid of points across the selected area is checked to
+  belong to the AAC window (or its own popups). If another window, including the
+  AACpipe Publisher or OCR setup window, covers the area, the frame is refused
+  and nothing is sent; the last shared text stays visible.
+- A locked or sleeping screen cannot be captured; sharing waits with a warning.
+
+The synthetic tests cannot establish compatibility with a particular AAC
+product. **Verify actual live typing and clearing on the intended
+Grid/Mind Express/Communicator version and hardware.**
 
 Keep the message bar's position, size, DPI, theme and row layout fixed. Changes
 to window size are rejected, but same-size internal layout changes cannot be
 detected reliably. Recalibrate after any such change. OCR reads only rendered
 content: it cannot reconstruct clipped, scrolled-off or hidden earlier words.
 
-Profiles remember application process name, window size, bands, language and
+Profiles remember application process name, window size, chat areas, language and
 bridge path. On restart, explicitly select/capture the window and recalibrate;
 the companion never silently attaches to another application. Profiles matching
-the selected process name and dimensions can restore band geometry.
+the selected process name and dimensions can restore the chat-area geometry.
 
 ## Privacy
 
 Recognition is offline. No analytics or OCR network service is used. Screenshots,
 blank reference images and recognised text are kept in process memory only, not
 saved or intentionally logged. The full selected window briefly exists in memory
-before text-band cropping. Normal OS memory, crash dumps and forensic erasure
+before chat-area cropping. In screen-capture mode, the copied pixels are the
+visible screen contents of that window's client area only. Normal OS memory, crash dumps and forensic erasure
 limitations still apply. The live setup/preview can expose message content to
 someone looking at the AAC device.
 
@@ -157,9 +192,11 @@ npm run ocr:test
 ```
 
 The executable test harness checks stabilisation and exact blank timing,
-deduplication, UTF-8 limits, actual native-engine recognition with original
-geometric symbols above text, multiple text rows, blank/failure distinction,
-real Windows client-area capture, and subprocess stdin/status/failure/cancellation.
+deduplication, UTF-8 limits, word filtering/ordering, actual native-engine
+recognition of a Grid-like two-line chat bar with original geometric symbols
+above each label (including a lone "I"), symbol-only refusal, cursor tolerance,
+blank/failure distinction, real Windows window and screen capture with an
+occlusion check, and subprocess stdin/status/failure/cancellation.
 It uses a fake bridge child for isolated transport tests, not the user's live
 Publisher or real messages. Rust tests cover CLI validation and stdin bounds.
 

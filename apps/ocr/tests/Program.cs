@@ -20,9 +20,10 @@ internal static class Program
             TestBridgeParsing();
             TestBridgeTransport().GetAwaiter().GetResult();
             var modelPath = args.Length > 0 ? Path.GetFullPath(args[0]) : throw new ArgumentException("Pass the tessdata directory.");
+            TestCompose();
             TestRecognition(modelPath);
             TestWindowCapture();
-            Console.WriteLine($"PASS: {passed} assertions (tracking, bridge, actual OCR, symbol exclusion, capture).");
+            Console.WriteLine($"PASS: {passed} assertions (tracking, bridge, word filtering, actual OCR with symbols, capture).");
             return 0;
         }
         catch (Exception error)
@@ -129,68 +130,181 @@ internal static class Program
         return 0;
     }
 
+    private static void TestCompose()
+    {
+        static OcrWord Word(string text, float confidence, float x, float y, float height = 20) =>
+            new(text, confidence, new RectangleF(x, y, text.Length * 10, height));
+        Check(Recognizer.Compose([]) == "", "no words is empty");
+        Check(Recognizer.Compose([Word("drink", 90, 120, 80), Word("I", 88, 10, 82), Word("want", 91, 40, 80)]) == "I want drink",
+            "words on one line are ordered left to right");
+        Check(Recognizer.Compose([Word("today", 90, 10, 140), Word("Hello", 90, 10, 80)]) == "Hello today", "lines are ordered top to bottom");
+        Check(Recognizer.Compose([Word("Hello", 90, 10, 80), Word("~", 95, 10, 10, 60), Word("|", 70, 60, 80)]) == "Hello",
+            "punctuation-only symbol fragments are ignored");
+        Check(Recognizer.Compose([Word("Hello", 90, 10, 80), Word("OO", 90, 10, 0, 70)]) == "Hello", "symbol-sized letters are ignored");
+        Check(Recognizer.Compose([Word("Hello", 90, 10, 80), Word("xq", 20, 10, 10, 8)]) == "Hello", "small low-confidence specks are ignored");
+        Throws<InvalidOperationException>(() => Recognizer.Compose([Word("Hello", 90, 10, 80), Word("partnr", 35, 70, 80)]),
+            "an unreadable word inside a text line is refused, not dropped");
+        Throws<InvalidOperationException>(() => Recognizer.Compose([Word("Hellq", 40, 10, 80)]), "only low-confidence text is refused");
+        Check(Recognizer.Compose([Word("~~", 40, 10, 80)]) == "", "only symbol noise reads as no text");
+    }
+
+    // Original geometric pictures, not third-party symbol artwork.
+    private static void DrawSymbol(Graphics graphics, int kind, int x, int y)
+    {
+        using var pen = new Pen(Color.Black, 4);
+        switch (kind % 6)
+        {
+            case 0: graphics.FillEllipse(Brushes.Gold, x, y, 64, 64); graphics.DrawEllipse(pen, x, y, 64, 64); break;
+            case 1: graphics.FillRectangle(Brushes.SteelBlue, x + 4, y + 4, 56, 56); break;
+            case 2: graphics.FillPolygon(Brushes.Green, new Point[] {new Point(x + 32, y), new Point(x + 64, y + 64), new Point(x, y + 64) }); break;
+            case 3:
+                graphics.DrawEllipse(pen, x + 22, y, 20, 20);
+                graphics.DrawLine(pen, x + 32, y + 20, x + 32, y + 46);
+                graphics.DrawLine(pen, x + 10, y + 30, x + 54, y + 30);
+                graphics.DrawLine(pen, x + 32, y + 46, x + 14, y + 64);
+                graphics.DrawLine(pen, x + 32, y + 46, x + 50, y + 64);
+                break;
+            case 4:
+                graphics.FillPolygon(Brushes.IndianRed, new Point[] {new Point(x + 32, y), new Point(x + 64, y + 28), new Point(x, y + 28) });
+                graphics.FillRectangle(Brushes.Peru, x + 8, y + 28, 48, 36);
+                graphics.FillRectangle(Brushes.White, x + 26, y + 42, 12, 22);
+                break;
+            default:
+                graphics.DrawArc(pen, x + 4, y + 4, 56, 56, 200, 300);
+                graphics.DrawLine(pen, x + 32, y + 10, x + 32, y + 54);
+                break;
+        }
+    }
+
+    private static Bitmap ChatBar(Size size, IReadOnlyList<string[]> lines)
+    {
+        var image = new Bitmap(size.Width, size.Height);
+        using var graphics = Graphics.FromImage(image);
+        graphics.Clear(Color.White);
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using var font = new Font("Arial", 22, FontStyle.Regular, GraphicsUnit.Pixel);
+        var kind = 0;
+        for (var row = 0; row < lines.Count; row++)
+        {
+            var x = 30;
+            foreach (var word in lines[row])
+            {
+                var width = Math.Max(72, (int)graphics.MeasureString(word, font).Width + 8);
+                var top = 20 + row * 125;
+                DrawSymbol(graphics, kind++, x + (width - 64) / 2, top);
+                var label = (int)graphics.MeasureString(word, font).Width;
+                graphics.DrawString(word, font, Brushes.Black, x + (width - label) / 2, top + 72);
+                x += width + 14;
+            }
+        }
+        return image;
+    }
+
     private static void TestRecognition(string modelPath)
     {
-        using var empty = new Bitmap(900, 240);
-        using (var graphics = Graphics.FromImage(empty)) graphics.Clear(Color.White);
-        var bands = new[] { new Rectangle(10, 100, 870, 65), new Rectangle(10, 170, 870, 65) };
-        var blanks = Recognizer.Calibrate(empty, bands);
+        var size = new Size(1000, 300);
+        using var empty = ChatBar(size, []);
+        // The user drags one rectangle around the whole chat area, symbols and all lines included.
+        var area = new[] { new Rectangle(10, 5, 980, 285) };
+        var blanks = Recognizer.Calibrate(empty, area);
         using var recognizer = new Recognizer(modelPath, "eng");
-        Check(recognizer.Read(empty, bands, blanks) == "", "calibrated blank is empty");
-        using var frame = (Bitmap)empty.Clone();
-        using (var graphics = Graphics.FromImage(frame))
-        {
-            // Original geometric test symbols, not third-party symbol artwork.
-            graphics.FillEllipse(Brushes.Red, 50, 10, 70, 70);
-            graphics.FillRectangle(Brushes.Blue, 190, 10, 70, 70);
-            using var font = new Font("Arial", 30, FontStyle.Regular, GraphicsUnit.Pixel);
-            graphics.DrawString("NOT THE MESSAGE", font, Brushes.Black, 320, 20);
-            graphics.DrawString("Hello partner", font, Brushes.Black, 15, 108);
-            graphics.DrawString("I need a drink", font, Brushes.Black, 15, 178);
-        }
-        var recognised = recognizer.Read(frame, bands, blanks);
-        Check(recognised.Contains("Hello partner", StringComparison.Ordinal), $"first text row is recognised (actual: {recognised})");
-        Check(recognised.Contains("need a drink", StringComparison.Ordinal), $"second text row is recognised (actual: {recognised})");
-        Check(!recognised.Contains("NOT THE MESSAGE", StringComparison.Ordinal), $"text above the selected bands is excluded (actual: {recognised})");
-        using var correction = (Bitmap)empty.Clone();
-        using (var graphics = Graphics.FromImage(correction))
-        {
-            using var font = new Font("Arial", 30, FontStyle.Regular, GraphicsUnit.Pixel);
-            graphics.DrawString("Hello", font, Brushes.Black, 15, 108);
-        }
-        Check(recognizer.Read(correction, bands, blanks) == "Hello", "deletion and blank second row");
-        using var failed = new Bitmap(900, 240);
+        Check(recognizer.Read(empty, area, blanks) == "", "calibrated blank is empty");
+
+        using var frame = ChatBar(size, [["Hello", "partner", "I", "want"], ["a", "drink", "please"]]);
+        var timer = Stopwatch.StartNew();
+        var recognised = recognizer.Read(frame, area, blanks);
+        Console.WriteLine($"  chat bar read as: \"{recognised}\" in {timer.ElapsedMilliseconds} ms");
+        Check(recognised == "Hello partner I want a drink please", $"symbols are ignored and both lines read in order (actual: {recognised})");
+
+        using (var graphics = Graphics.FromImage(frame)) graphics.FillRectangle(Brushes.Black, 282, 222, 2, 26);
+        var withCursor = recognizer.Read(frame, area, blanks);
+        Check(withCursor == "Hello partner I want a drink please", $"a text cursor after the last word is not read as I (actual: {withCursor})");
+        Check(Recognizer.IsCursor(new Rectangle(270, 213, 2, 26), [new Rectangle(201, 216, 61, 20), new Rectangle(270, 213, 2, 26)]), "trailing thin stroke is a cursor");
+        Check(!Recognizer.IsCursor(new Rectangle(242, 91, 2, 16), [new Rectangle(242, 91, 2, 16), new Rectangle(305, 91, 44, 16)]), "a lone I followed by more text is not a cursor");
+        Check(!Recognizer.IsCursor(new Rectangle(242, 91, 2, 16), [new Rectangle(242, 91, 2, 16), new Rectangle(51, 220, 10, 12)]), "a lone I above another text row is not a cursor");
+
+        using var single = ChatBar(size, [["Hello"]]);
+        Check(recognizer.Read(single, area, blanks) == "Hello", "a single symbol word");
+
+        using var symbolsOnly = (Bitmap)empty.Clone();
+        using (var graphics = Graphics.FromImage(symbolsOnly))
+            for (var kind = 0; kind < 6; kind++) DrawSymbol(graphics, kind, 30 + kind * 90, 20);
+        Throws<InvalidOperationException>(() => recognizer.Read(symbolsOnly, area, blanks), "symbols without readable text never clear the partner display");
+
+        using var cursor = (Bitmap)empty.Clone();
+        using (var graphics = Graphics.FromImage(cursor)) graphics.FillRectangle(Brushes.Black, 30, 100, 2, 26);
+        Check(recognizer.Read(cursor, area, blanks) == "", "a blinking text cursor alone is blank");
+
+        using var failed = new Bitmap(size.Width, size.Height);
         using (var graphics = Graphics.FromImage(failed)) graphics.Clear(Color.Black);
-        Throws<InvalidOperationException>(() => recognizer.Read(failed, bands, blanks), "black failed capture is not clear");
+        Throws<InvalidOperationException>(() => recognizer.Read(failed, area, blanks), "black failed capture is not clear");
         var changed = blanks[0].ToArray();
         changed[100] = 0;
         Check(!Recognizer.MatchesBlank(changed, blanks[0]), "a small mark prevents blank classification");
+        Check(Recognizer.DifferenceFraction(blanks[0], blanks[0]) == 0, "identical images have no difference");
         Throws<InvalidOperationException>(() => recognizer.Read(frame, [], []), "missing calibration is an error");
     }
 
-    private static void TestWindowCapture()
+    private static T Pump<T>(Func<T> work)
     {
-        using var form = new Form { Text = "AACpipe OCR synthetic capture test", ClientSize = new Size(500, 200), ShowInTaskbar = false };
-        form.Controls.Add(new Label { Text = "Hello partner", AutoSize = true, Location = new Point(20, 80), Font = new Font("Arial", 24) });
-        form.Show();
-        Application.DoEvents();
-        var target = new WindowTarget(form.Handle, (uint)Environment.ProcessId, form.Text);
-        // PrintWindow sends messages to the UI thread; keep that thread pumping.
-        var capture = Task.Run(() => WindowCapture.Capture(target));
+        // Capture sends messages to this UI thread; keep it pumping.
+        var task = Task.Run(work);
         var deadline = Stopwatch.StartNew();
-        while (!capture.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(5))
+        while (!task.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(5))
         {
             Application.DoEvents();
             Thread.Sleep(10);
         }
-        if (!capture.IsCompleted) throw new TimeoutException("Synthetic window capture timed out.");
-        using var bitmap = capture.GetAwaiter().GetResult();
-        Check(bitmap.Size == form.ClientSize, "capture matches client-area dimensions");
-        var pixels = Recognizer.Pixels(bitmap);
-        Check(pixels.Where((_, index) => index % 4 != 3).Distinct().Count() > 2, "capture contains rendered content");
-        Throws<InvalidOperationException>(() => WindowCapture.Capture(target, new Size(1, 1)), "layout changes rejected");
+        if (!task.IsCompleted) throw new TimeoutException("Synthetic window capture timed out.");
+        return task.GetAwaiter().GetResult();
+    }
+
+    private static void TestWindowCapture()
+    {
+        using var form = new Form
+        {
+            Text = "AACpipe OCR synthetic capture test", ClientSize = new Size(500, 200), ShowInTaskbar = false,
+            StartPosition = FormStartPosition.Manual, Location = new Point(100, 100), TopMost = true, BackColor = Color.White,
+        };
+        form.Controls.Add(new Label { Text = "Hello partner", AutoSize = true, Location = new Point(20, 80), Font = new Font("Arial", 24) });
+        form.Show();
+        form.Activate();
+        for (var i = 0; i < 20; i++) { Application.DoEvents(); Thread.Sleep(10); }
+        var target = new WindowTarget(form.Handle, (uint)Environment.ProcessId, form.Text);
+        var area = new[] { new Rectangle(10, 60, 480, 80) };
+
+        var (setup, mode) = Pump(() => WindowCapture.CaptureForSetup(target));
+        using (setup)
+        {
+            Check(mode == CaptureMode.Window, "applications that support window capture use it");
+            Check(setup.Size == form.ClientSize, "capture matches client-area dimensions");
+            Check(!WindowCapture.IsUniform(setup), "capture contains rendered content");
+        }
+        using (var screen = Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area)))
+        {
+            Check(screen.Size == form.ClientSize, "screen fallback matches client-area dimensions");
+            Check(!WindowCapture.IsUniform(screen), "screen fallback contains rendered content");
+        }
+        using (var cover = new Form
+        {
+            Text = "cover", ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, TopMost = true,
+            FormBorderStyle = FormBorderStyle.None, Location = form.PointToScreen(new Point(150, 70)), Size = new Size(120, 50),
+        })
+        {
+            cover.Show();
+            for (var i = 0; i < 20; i++) { Application.DoEvents(); Thread.Sleep(10); }
+            Throws<InvalidOperationException>(() => Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area)),
+                "a covered chat area is refused in screen mode");
+            Check(Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, [new Rectangle(10, 150, 480, 40)])) is { } uncovered && uncovered.Size == form.ClientSize,
+                "uncovered regions are still captured");
+        }
+        using var plain = new Bitmap(4, 4);
+        using (var graphics = Graphics.FromImage(plain)) graphics.Clear(Color.Black);
+        Check(WindowCapture.IsUniform(plain), "uniform failed captures are detected");
+        Throws<InvalidOperationException>(() => WindowCapture.Capture(target, CaptureMode.Window, new Size(1, 1), null), "layout changes rejected");
         form.Hide();
-        Throws<InvalidOperationException>(() => WindowCapture.Capture(target), "unavailable window is not blank");
-        Throws<InvalidOperationException>(() => WindowCapture.Capture(target with { ProcessId = uint.MaxValue }), "never attach to reused window from another process");
+        Throws<InvalidOperationException>(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area), "unavailable window is not blank");
+        Throws<InvalidOperationException>(() => WindowCapture.Capture(target with { ProcessId = uint.MaxValue }, CaptureMode.Window, form.ClientSize, null),
+            "never attach to reused window from another process");
     }
 }

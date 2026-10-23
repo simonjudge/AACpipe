@@ -10,7 +10,7 @@ internal sealed class MainForm : Form
     private readonly TextBox bridgePath = new() { Width = 360 };
     private readonly BandSelector selector = new() { Dock = DockStyle.Fill };
     private readonly TextBox preview = new() { Dock = DockStyle.Bottom, Height = 65, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
-    private readonly Label status = new() { Dock = DockStyle.Bottom, Height = 58, Text = "Choose the AAC window. Only selected text bands will be recognised.", Padding = new Padding(5) };
+    private readonly Label status = new() { Dock = DockStyle.Bottom, Height = 58, Text = "Choose the AAC window, then drag around the whole chat area. Graphic symbols are ignored.", Padding = new Padding(5) };
     private readonly CheckBox soleSource = new() { Text = "Grid/direct content updates are disabled; OCR is the only composition source.", AutoSize = true };
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 250 };
     private readonly Stopwatch clock = Stopwatch.StartNew();
@@ -21,6 +21,7 @@ internal sealed class MainForm : Form
     private readonly CancellationTokenSource lifetime = new();
     private WindowTarget? target;
     private Size captureSize;
+    private CaptureMode captureMode;
     private List<byte[]>? blankBands;
     private Recognizer? recognizer;
     private OcrProfile? profile;
@@ -34,14 +35,14 @@ internal sealed class MainForm : Form
 
     internal MainForm()
     {
-        Text = "AACpipe OCR - local text-band capture";
+        Text = "AACpipe OCR - local chat-area text capture";
         Size = new Size(1080, 760);
         MinimumSize = new Size(850, 620);
         var setup = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(5) };
         AddSetup(setup, windows);
         AddSetup(setup, Button("Refresh windows", RefreshWindows));
         AddSetup(setup, Button("Capture / recalibrate", CaptureSelection));
-        AddSetup(setup, Button("Clear text bands", () => selector.ClearBands()));
+        AddSetup(setup, Button("Clear chat area", () => selector.ClearBands()));
         AddSetup(setup, new Label { Text = "Language:", AutoSize = true, Padding = new Padding(0, 7, 0, 0) });
         AddSetup(setup, language);
         AddSetup(setup, Button("Calibrate EMPTY text", Calibrate));
@@ -62,7 +63,7 @@ internal sealed class MainForm : Form
             Dock = DockStyle.Top,
             Height = 58,
             Padding = new Padding(5),
-            Text = "1. Capture the AAC window.  2. Drag a band around EACH text row, below any graphic symbols.\n" +
+            Text = "1. Capture the AAC window.  2. Drag ONE rectangle around the whole chat area (symbols and all lines); symbols are ignored.\n" +
                 "3. Clear the AAC message and calibrate EMPTY text.  4. Start AACpipe and enable sharing. " +
                 "Do not resize/reflow the AAC layout. Closing this window leaves OCR in the tray."
         };
@@ -73,7 +74,7 @@ internal sealed class MainForm : Form
         Controls.Add(controls);
         Controls.Add(bridgeRow);
         Controls.Add(setup);
-        selector.BandsChanged += () => { blankBands = null; status.Text = $"{selector.Bands.Count} text band(s). Calibrate with an empty AAC message."; };
+        selector.BandsChanged += () => { blankBands = null; status.Text = $"{selector.Bands.Count} chat area(s) selected. Calibrate with an empty AAC message."; };
         timer.Tick += async (_, _) => await Tick();
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show setup", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); });
@@ -148,7 +149,8 @@ internal sealed class MainForm : Form
         target = windows.SelectedItem as WindowTarget ?? throw new InvalidOperationException("Select the AAC window first.");
         blankBands = null;
         selector.ClearBands();
-        var frame = await CaptureForSetup(target);
+        var (frame, mode) = await CaptureForSetup(target);
+        captureMode = mode;
         captureSize = frame.Size;
         selector.SetImage(frame);
         using var process = Process.GetProcessById((int)target.ProcessId);
@@ -158,42 +160,65 @@ internal sealed class MainForm : Form
             selector.Bands.AddRange(profile.Bands);
             selector.Invalidate();
         }
-        status.Text = "Drag one rectangle around each text row, excluding graphic symbols. Then clear the AAC message and calibrate EMPTY text.";
+        status.Text = (captureMode == CaptureMode.Screen
+            ? "This application does not support background capture, so the visible screen is read: keep the chat area uncovered while sharing. "
+            : "") + "Drag one rectangle around the whole chat area, including symbols and all lines. Then clear the AAC message and calibrate EMPTY text.";
     }
 
     private async Task Calibrate()
     {
         var selected = target ?? throw new InvalidOperationException("Capture the AAC window first.");
-        if (selector.Bands.Count == 0) throw new InvalidOperationException("Drag at least one text band first.");
-        if (MessageBox.Show(this, "Is the AAC message EMPTY, with no text or placeholder inside the selected bands?\n" +
-            "The current band images become the blank reference. Symbols must be outside the bands.",
+        if (selector.Bands.Count == 0) throw new InvalidOperationException("Drag a rectangle around the chat area first.");
+        if (MessageBox.Show(this, "Is the AAC message EMPTY, with no text, symbols or placeholder inside the selected chat area?\n" +
+            "The current image of the chat area becomes the blank reference.",
             "Confirm empty message", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-        using var frame = await CaptureForSetup(selected, captureSize);
+        var (frame, _) = await CaptureForSetup(selected, captureSize);
+        using var reference = frame;
         blankBands = Recognizer.Calibrate(frame, selector.Bands);
         status.Text = "Empty reference calibrated in memory. Start AACpipe, disable other content sources, then start sharing.";
     }
 
-    private async Task<Bitmap> CaptureForSetup(WindowTarget selected, Size? size = null)
+    private async Task<(Bitmap Frame, CaptureMode Mode)> CaptureForSetup(WindowTarget selected, Size? size = null)
     {
         busy = true;
         UpdateControls();
-        var capture = Task.Run(() => WindowCapture.Capture(selected, size));
+        var mode = captureMode;
+        var regions = selector.Bands.ToArray();
+        // A screen capture would otherwise photograph this window if it overlaps the AAC application.
+        var wasVisible = Visible && WindowState != FormWindowState.Minimized;
+        if (wasVisible)
+        {
+            Hide();
+            await Task.Delay(400);
+        }
+        var capture = Task.Run(() => size is { } known
+            ? (WindowCapture.Capture(selected, mode, known, mode == CaptureMode.Screen ? regions : null), mode)
+            : WindowCapture.CaptureForSetup(selected));
         try { return await capture.WaitAsync(TimeSpan.FromSeconds(3)); }
         catch
         {
             // PrintWindow can block inside another application. Do not allow overlapping captures.
             status.Text = "Capture did not complete. Waiting for the selected application; no text is being sent.";
-            try { using var abandoned = await capture; }
+            try { using var abandoned = (await capture).Item1; }
             catch (Exception error) { Report(error); }
             throw;
         }
-        finally { busy = false; if (!IsDisposed) UpdateControls(); }
+        finally
+        {
+            if (wasVisible && !IsDisposed)
+            {
+                Show();
+                Activate();
+            }
+            busy = false;
+            if (!IsDisposed) UpdateControls();
+        }
     }
 
     private void SaveProfile()
     {
         var selected = target ?? throw new InvalidOperationException("Capture the AAC window first.");
-        if (selector.Bands.Count == 0) throw new InvalidOperationException("Select text bands first.");
+        if (selector.Bands.Count == 0) throw new InvalidOperationException("Select the chat area first.");
         using var process = Process.GetProcessById((int)selected.ProcessId);
         profile = new OcrProfile(process.ProcessName, captureSize.Width, captureSize.Height,
             selector.Bands.ToArray(), language.Text.Trim(), Path.GetFullPath(bridgePath.Text));
@@ -205,7 +230,7 @@ internal sealed class MainForm : Form
     {
         if (sharing) return;
         if (busy) throw new InvalidOperationException("Wait for the current capture or bridge command to finish.");
-        if (target is null || blankBands is null) throw new InvalidOperationException("Capture, select text bands and calibrate EMPTY text first.");
+        if (target is null || blankBands is null) throw new InvalidOperationException("Capture, select the chat area and calibrate EMPTY text first.");
         if (!soleSource.Checked) throw new InvalidOperationException("Disable other content sources and confirm OCR is the only source.");
         if (!File.Exists(bridgePath.Text)) throw new FileNotFoundException("Choose the updated aacpipe-bridge.exe first.");
         if (!Regex.IsMatch(language.Text, @"^[a-zA-Z0-9_]+(?:\+[a-zA-Z0-9_]+)*$"))
@@ -222,6 +247,8 @@ internal sealed class MainForm : Form
         lastProbe = TimeSpan.MinValue;
         acknowledgedSnapshot = null;
         status.Text = "Sharing enabled. OCR may make mistakes. No speech events will be inferred.";
+        // Screen capture reads visible pixels, so keep this window from covering the chat area.
+        if (captureMode == CaptureMode.Screen) WindowState = FormWindowState.Minimized;
         tray.Text = "AACpipe OCR: sharing";
         UpdateControls();
         timer.Start();
@@ -264,9 +291,10 @@ internal sealed class MainForm : Form
         var reader = recognizer!;
         var bands = selector.Bands.ToArray();
         var blanks = blankBands!;
+        var mode = captureMode;
         var work = Task.Run(() =>
         {
-            using var frame = WindowCapture.Capture(selected, captureSize);
+            using var frame = WindowCapture.Capture(selected, mode, captureSize, mode == CaptureMode.Screen ? bands : null);
             return reader.Read(frame, bands, blanks);
         });
         try

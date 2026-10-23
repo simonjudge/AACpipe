@@ -89,7 +89,7 @@ internal sealed class BandSelector : Control
         base.OnPaint(e);
         if (image is null)
         {
-            TextRenderer.DrawText(e.Graphics, "Capture the AAC window, then drag one rectangle around each TEXT row.\nExclude symbols above the words. Do not crop through letters.", Font,
+            TextRenderer.DrawText(e.Graphics, "Capture the AAC window, then drag one rectangle around the whole chat area.\nInclude the symbols and every line of text; symbols are ignored. Leave a small margin.", Font,
                 ClientRectangle, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
             return;
         }
