@@ -232,7 +232,11 @@ internal sealed class MainForm : Form
         if (sharing) return;
         if (busy) throw new InvalidOperationException("Wait for the current capture or bridge command to finish.");
         if (target is null || blankBands is null) throw new InvalidOperationException("Capture, select the chat area and calibrate EMPTY text first.");
-        if (!soleSource.Checked) throw new InvalidOperationException("Disable other content sources and confirm OCR is the only source.");
+        if (!soleSource.Checked)
+        {
+            soleSource.Focus();
+            throw new InvalidOperationException("Tick \"OCR is the only composition source\" (below the bridge path) to confirm Grid is not also sending text to AACpipe, then start again.");
+        }
         if (!File.Exists(bridgePath.Text)) throw new FileNotFoundException("Choose the updated aacpipe-bridge.exe first.");
         if (!Regex.IsMatch(language.Text, @"^[a-zA-Z0-9_]+(?:\+[a-zA-Z0-9_]+)*$"))
             throw new InvalidOperationException("Use a Tesseract language name, for example eng or eng+fra.");

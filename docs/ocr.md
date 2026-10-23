@@ -56,8 +56,10 @@ installation step; the running companion never downloads models.
    selected area contains no text, symbols or placeholder. The empty reference
    is kept only in memory. A thin blinking text cursor is tolerated. Dynamic
    backgrounds may prevent automatic clearing.
-6. Choose the updated bridge executable if needed, confirm the single-source
-   checkbox, then click **Start / resume sharing**.
+6. Choose the updated bridge executable if needed. Tick **"Grid/direct content
+   updates are disabled; OCR is the only composition source."** (sharing will
+   not start until it is ticked, so Grid and OCR never both send text), then
+   click **Start / resume sharing**.
 7. Compose and correct some invented messages. The read-only preview shows the
    latest readable text; status distinguishes recognition from bridge delivery.
    Save the profile if desired.
