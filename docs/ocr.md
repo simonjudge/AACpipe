@@ -45,13 +45,19 @@ installation step; the running companion never downloads models.
 1. Start AACpipe and pair the partner normally.
 2. Disable Grid/direct **content-producing** bridge actions. Pairing, status and
    management commands can remain. OCR must be the only composition writer.
-3. Open the AAC app in its intended fixed-size layout. Select that window in
-   OCR setup and click **Capture / recalibrate**.
-4. Drag **one rectangle around the whole chat area**: every line, symbols and
-   labels included, with a small margin, across the full width where words can
-   appear. Normally a single rectangle is all you need. (Up to twelve
-   non-overlapping areas are supported for split layouts; they are read
-   top-to-bottom then left-to-right.) Use **Clear chat area** to start again.
+3. Open the AAC app in its intended fixed-size layout, then start the OCR
+   companion. It picks the AAC window automatically (the application in the
+   saved profile, otherwise a known AAC application such as Grid 3, Mind Express,
+   TD Snap or Communicator), brings it to the front and captures it. If the
+   wrong window is chosen, pick another from the list (it is captured straight
+   away) or click **Capture**.
+4. The **chat area is found automatically** and shown as a green box: the
+   largest bordered or filled box across the top part of the window, which is
+   where AAC applications almost always put the message bar. A saved profile's
+   area takes precedence. Check that the box covers the whole chat area (every
+   line, symbols and labels included, across the full width where words can
+   appear). If it does not, drag **one rectangle** around it yourself; a new
+   drag replaces the current box. Use **Clear chat area** to start again.
 5. Clear the AAC message. Click **Calibrate EMPTY text** and confirm that the
    selected area contains no text, symbols or placeholder. The empty reference
    is kept only in memory. A thin blinking text cursor is tolerated. Dynamic

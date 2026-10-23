@@ -42,20 +42,50 @@ internal static class WindowCapture
     internal static (Bitmap Frame, CaptureMode Mode) CaptureForSetup(WindowTarget target)
     {
         var size = ClientSize(target, null);
-        // This process was just clicked, so Windows allows it to bring the AAC window to the front.
-        if (GetForegroundWindow() != target.Handle && SetForegroundWindow(target.Handle)) Thread.Sleep(300);
+        BringToFront(target);
+        var visible = FullyVisible(target, size);
         var screen = CopyFromScreen(target, size, null);
         Bitmap? printed = null;
         try { printed = PrintClient(target, size); }
         catch (InvalidOperationException) { }
-        if (printed is not null && !IsUniform(printed) && (!FullyVisible(target, size) ||
+        if (printed is not null && !IsUniform(printed) && (!visible ||
             Recognizer.DifferenceFraction(Recognizer.Pixels(printed), Recognizer.Pixels(screen)) <= 0.05))
         {
             screen.Dispose();
             return (printed, CaptureMode.Window);
         }
         printed?.Dispose();
+        if (!visible)
+        {
+            screen.Dispose();
+            throw new InvalidOperationException($"{target.Title} is covered by another window. Bring it to the front, uncover it, then click Capture.");
+        }
         return (screen, CaptureMode.Screen);
+    }
+
+    // Windows only lets the foreground application change the foreground window. Call this before hiding the OCR
+    // window; if Windows still refuses, input is briefly shared with the foreground thread, which permits it.
+    internal static void BringToFront(WindowTarget target)
+    {
+        var handle = target.Handle;
+        var foreground = GetForegroundWindow();
+        if (foreground == handle || GetAncestor(foreground, 3) == handle) return;
+        if (!SetForegroundWindow(handle) || GetForegroundWindow() != handle)
+        {
+            var foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+            var ownThread = GetCurrentThreadId();
+            var attached = foregroundThread != ownThread && AttachThreadInput(ownThread, foregroundThread, true);
+            try
+            {
+                BringWindowToTop(handle);
+                SetForegroundWindow(handle);
+            }
+            finally
+            {
+                if (attached) AttachThreadInput(ownThread, foregroundThread, false);
+            }
+        }
+        Thread.Sleep(300);
     }
 
     // Returns the mode actually used: window capture permanently falls back to screen capture if the app stops providing it.
@@ -198,6 +228,14 @@ internal static class WindowCapture
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetForegroundWindow(nint handle);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(nint handle);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint attach, uint attachTo, [MarshalAs(UnmanagedType.Bool)] bool attachInput);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     private delegate bool EnumWindowCallback(nint handle, nint parameter);
     [StructLayout(LayoutKind.Sequential)]

@@ -24,6 +24,13 @@ internal sealed class BandSelector : Control
         Invalidate();
     }
 
+    internal void SetBands(IEnumerable<Rectangle> bands)
+    {
+        Bands.Clear();
+        Bands.AddRange(bands);
+        Invalidate();
+    }
+
     internal void ClearBands()
     {
         Bands.Clear();
@@ -75,10 +82,11 @@ internal sealed class BandSelector : Control
         var band = Between(anchor.Value, ImagePoint(e.Location));
         anchor = null;
         Capture = false;
-        if (band.Width >= 8 && band.Height >= 8 && Bands.Count < 12 && !Bands.Any(other => other.IntersectsWith(band)))
+        // One rectangle covers the whole chat area, so a new drag replaces the current (possibly guessed) one.
+        if (band.Width >= 8 && band.Height >= 8)
         {
+            Bands.Clear();
             Bands.Add(band);
-            Bands.Sort((a, b) => a.Top != b.Top ? a.Top.CompareTo(b.Top) : a.Left.CompareTo(b.Left));
             BandsChanged?.Invoke();
         }
         Invalidate();
@@ -89,7 +97,7 @@ internal sealed class BandSelector : Control
         base.OnPaint(e);
         if (image is null)
         {
-            TextRenderer.DrawText(e.Graphics, "Capture the AAC window, then drag one rectangle around the whole chat area.\nInclude the symbols and every line of text; symbols are ignored. Leave a small margin.", Font,
+            TextRenderer.DrawText(e.Graphics, "Choose the AAC window and click Capture. The chat area is found automatically; if it is wrong, drag one\nrectangle around the whole chat area. Include the symbols and every line of text; symbols are ignored.", Font,
                 ClientRectangle, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
             return;
         }

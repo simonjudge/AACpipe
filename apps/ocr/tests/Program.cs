@@ -23,9 +23,10 @@ internal static class Program
             TestBridgeTransport().GetAwaiter().GetResult();
             var modelPath = args.Length > 0 ? Path.GetFullPath(args[0]) : throw new ArgumentException("Pass the tessdata directory.");
             TestLayout();
+            TestChatAreaFinder();
             TestRecognition(modelPath);
             TestWindowCapture();
-            Console.WriteLine($"PASS: {passed} assertions (tracking, bridge, text layout, actual OCR with symbols, capture).");
+            Console.WriteLine($"PASS: {passed} assertions (tracking, bridge, text layout, window/chat-area guessing, actual OCR with symbols, capture).");
             return 0;
         }
         catch (Exception error)
@@ -172,6 +173,51 @@ internal static class Program
         Check(White(cleaned, 40, 50) && White(cleaned, 82, 42), "the picture and its detached fragment are erased");
         Check(!White(cleaned, 10, 108), "letters are kept");
         Check(Recognizer.Background(Recognizer.Pixels(blank)).ToArgb() == Color.White.ToArgb(), "background is the blank's main colour");
+    }
+    private static void TestChatAreaFinder()
+    {
+        Check(ChatAreaFinder.Score("Grid 3", "Grid 3 - Voco Chat - 00 Start", null) > ChatAreaFinder.Score("explorer", "Grid layouts", null),
+            "Grid 3 is preferred over a window that only mentions grids");
+        Check(ChatAreaFinder.Score("notepad", "Untitled - Notepad", null) == 0, "ordinary applications are not guessed");
+        Check(ChatAreaFinder.Score("MyAac", "Talker", "MyAac") > ChatAreaFinder.Score("Grid 3", "Grid 3", "MyAac"), "the saved profile's application wins");
+
+        // A Grid-like window: a bordered chat bar across the top (with a symbol and a word in it) and coloured cells below.
+        using var window = new Bitmap(1200, 700);
+        using (var graphics = Graphics.FromImage(window))
+        {
+            graphics.Clear(Color.White);
+            graphics.FillRectangle(Brushes.SlateGray, 10, 40, 250, 150);
+            using var border = new Pen(Color.DarkGray, 2);
+            graphics.DrawRectangle(border, 270, 40, 920, 150);
+            DrawSymbol(graphics, 3, 290, 50);
+            using var font = new Font("Arial", 28, FontStyle.Regular, GraphicsUnit.Pixel);
+            graphics.DrawString("hello", font, Brushes.Black, 285, 125);
+            for (var row = 0; row < 3; row++)
+                for (var col = 0; col < 5; col++)
+                {
+                    graphics.FillRectangle(Brushes.LightGreen, 10 + col * 238, 205 + row * 165, 228, 155);
+                    DrawSymbol(graphics, row + col, 90 + col * 238, 260 + row * 165);
+                }
+        }
+        var found = ChatAreaFinder.FindChatArea(window);
+        Check(found is { } area && Rectangle.FromLTRB(270, 40, 1192, 192).Contains(area) && area.Width > 880 && area.Height > 120,
+            $"the chat bar at the top is found inside its border (actual: {found})");
+
+        // A bar with a coloured fill and no border, touching the window edges.
+        using var filled = new Bitmap(800, 500);
+        using (var graphics = Graphics.FromImage(filled))
+        {
+            graphics.Clear(Color.FromArgb(240, 240, 240));
+            using var fill = new SolidBrush(Color.FromArgb(255, 244, 200));
+            graphics.FillRectangle(fill, 0, 30, 800, 90);
+            graphics.FillRectangle(Brushes.SteelBlue, 20, 150, 200, 150);
+        }
+        var bar = ChatAreaFinder.FindChatArea(filled);
+        Check(bar is { } b && b.Top >= 30 && b.Bottom <= 120 && b.Width > 750, $"a borderless filled bar is found (actual: {bar})");
+
+        using var plain = new Bitmap(800, 500);
+        using (var graphics = Graphics.FromImage(plain)) graphics.Clear(Color.White);
+        Check(ChatAreaFinder.FindChatArea(plain) is null, "no chat area is guessed on an empty window");
     }
     // Original geometric pictures, not third-party symbol artwork.
     private static void DrawSymbol(Graphics graphics, int kind, int x, int y)

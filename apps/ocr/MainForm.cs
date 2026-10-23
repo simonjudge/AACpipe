@@ -10,7 +10,7 @@ internal sealed class MainForm : Form
     private readonly TextBox bridgePath = new() { Width = 360 };
     private readonly BandSelector selector = new() { Dock = DockStyle.Fill };
     private readonly TextBox preview = new() { Dock = DockStyle.Bottom, Height = 65, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
-    private readonly Label status = new() { Dock = DockStyle.Bottom, Height = 58, Text = "Choose the AAC window, then drag around the whole chat area. Graphic symbols are ignored.", Padding = new Padding(5) };
+    private readonly Label status = new() { Dock = DockStyle.Bottom, Height = 76, Text = "Looking for the AAC window...", Padding = new Padding(5) };
     private readonly CheckBox soleSource = new() { Text = "Grid/direct content updates are disabled; OCR is the only composition source.", AutoSize = true };
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 250 };
     private readonly Stopwatch clock = Stopwatch.StartNew();
@@ -41,7 +41,7 @@ internal sealed class MainForm : Form
         var setup = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(5) };
         AddSetup(setup, windows);
         AddSetup(setup, Button("Refresh windows", RefreshWindows));
-        AddSetup(setup, Button("Capture / recalibrate", CaptureSelection));
+        AddSetup(setup, Button("Capture", CaptureSelection));
         AddSetup(setup, Button("Clear chat area", () => selector.ClearBands()));
         AddSetup(setup, new Label { Text = "Language:", AutoSize = true, Padding = new Padding(0, 7, 0, 0) });
         AddSetup(setup, language);
@@ -63,8 +63,9 @@ internal sealed class MainForm : Form
             Dock = DockStyle.Top,
             Height = 58,
             Padding = new Padding(5),
-            Text = "1. Capture the AAC window.  2. Drag ONE rectangle around the whole chat area (symbols and all lines); symbols are ignored.\n" +
-                "3. Clear the AAC message and calibrate EMPTY text.  4. Start AACpipe and enable sharing. " +
+            Text = "1. The AAC window and its chat area are found automatically (green box); if wrong, pick the window and click Capture,\n" +
+                "or drag ONE rectangle around the whole chat area (symbols and all lines; symbols are ignored).  " +
+                "2. Clear the AAC message and calibrate EMPTY text.  3. Start AACpipe and enable sharing. " +
                 "Do not resize/reflow the AAC layout. Closing this window leaves OCR in the tray."
         };
         Controls.Add(selector);
@@ -76,6 +77,21 @@ internal sealed class MainForm : Form
         Controls.Add(setup);
         selector.BandsChanged += () => { blankBands = null; status.Text = $"{selector.Bands.Count} chat area(s) selected. Calibrate with an empty AAC message."; };
         timer.Tick += async (_, _) => await Tick();
+        windows.SelectionChangeCommitted += async (_, _) =>
+        {
+            try { await CaptureSelection(); }
+            catch (Exception error) { Report(error); }
+        };
+        Shown += async (_, _) =>
+        {
+            if (windows.SelectedItem is null)
+            {
+                status.Text = "No AAC application found. Start it, click Refresh windows, choose its window and click Capture.";
+                return;
+            }
+            try { await CaptureSelection(); }
+            catch (Exception error) { Report(error); }
+        };
         var menu = new ContextMenuStrip();
         menu.Items.Add("Show setup", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); });
         menu.Items.Add("Pause (keep text)", null, (_, _) => Pause("Paused from tray. Last shared text remains on the partner display."));
@@ -134,7 +150,11 @@ internal sealed class MainForm : Form
 
     private void RefreshWindows()
     {
-        windows.DataSource = WindowCapture.ListWindows();
+        var list = WindowCapture.ListWindows();
+        windows.DataSource = list;
+        var guess = ChatAreaFinder.GuessWindow(list, profile?.ProcessName);
+        if (guess is not null) windows.SelectedItem = guess;
+        else windows.SelectedIndex = -1;
     }
 
     private void BrowseBridge()
@@ -154,15 +174,22 @@ internal sealed class MainForm : Form
         captureSize = frame.Size;
         selector.SetImage(frame);
         using var process = Process.GetProcessById((int)target.ProcessId);
+        string found;
         if (profile is not null && profile.ProcessName == process.ProcessName &&
             profile.Width == frame.Width && profile.Height == frame.Height)
         {
-            selector.Bands.AddRange(profile.Bands);
-            selector.Invalidate();
+            selector.SetBands(profile.Bands);
+            found = "Chat area restored from the saved profile (green box). If it is wrong, drag a new rectangle. ";
         }
-        status.Text = (captureMode == CaptureMode.Screen
+        else if (ChatAreaFinder.FindChatArea(frame) is { } area)
+        {
+            selector.SetBands([area]);
+            found = "Chat area found automatically (green box). If it is wrong, drag a new rectangle around the whole chat area. ";
+        }
+        else found = "Drag one rectangle around the whole chat area, including symbols and all lines. ";
+        status.Text = $"Captured {target.Title}. " + found + (captureMode == CaptureMode.Screen
             ? "This application does not support background capture, so the visible screen is read: keep the chat area uncovered while sharing. "
-            : "") + "Drag one rectangle around the whole chat area, including symbols and all lines. Then clear the AAC message and calibrate EMPTY text.";
+            : "") + "Then clear the AAC message and click Calibrate EMPTY text.";
     }
 
     private async Task Calibrate()
@@ -185,6 +212,8 @@ internal sealed class MainForm : Form
         UpdateControls();
         var mode = captureMode;
         var regions = selector.Bands.ToArray();
+        // While this window is still in front, Windows allows it to bring the AAC window forward.
+        WindowCapture.BringToFront(selected);
         // A screen capture would otherwise photograph this window if it overlaps the AAC application.
         var wasVisible = Visible && WindowState != FormWindowState.Minimized;
         if (wasVisible)
@@ -209,6 +238,10 @@ internal sealed class MainForm : Form
             if (wasVisible && !IsDisposed)
             {
                 Show();
+                // The AAC window was brought forward for the capture; return above it so the result can be checked.
+                // Windows may refuse to give this window the focus, but a brief topmost flag still raises it.
+                TopMost = true;
+                TopMost = false;
                 Activate();
             }
             busy = false;
