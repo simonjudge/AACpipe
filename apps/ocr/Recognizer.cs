@@ -7,11 +7,18 @@ namespace AACpipe.Ocr;
 
 internal sealed record OcrWord(string Text, float Confidence, RectangleF Box);
 
+// Letter-sized shapes on text lines, with the typical letter height. Everything else in the chat area is symbol artwork.
+internal sealed record TextLayout(List<Rectangle> Lines, List<Rectangle> Marks, int LetterHeight);
+
 internal sealed class Recognizer : IDisposable
 {
     internal const float AcceptConfidence = 60;
     // Tolerates a blinking cursor or anti-aliasing noise on an otherwise empty chat area.
     internal const double BlankNoiseFraction = 0.005;
+    // Gaps between letters are at most about a quarter of the letter height; gaps between words are about half or more.
+    internal const double WordGap = 0.33;
+    // Test/diagnostic hook: receives each rebuilt text line and its raw OCR words.
+    internal static Action<Bitmap, IReadOnlyList<OcrWord>>? Diagnostics;
     private readonly TesseractEngine engine;
     private readonly bool english;
 
@@ -36,24 +43,97 @@ internal sealed class Recognizer : IDisposable
                 throw new InvalidOperationException("The chat area is outside the capture. Recalibrate.");
             using var crop = frame.Clone(area, PixelFormat.Format32bppArgb);
             var pixels = Pixels(crop);
-            if (MatchesBlank(pixels, blankAreas[index])) continue;
-            var (cleanPixels, allMarks) = RemoveSymbols(pixels, blankAreas[index], crop.Width, crop.Height);
-            var cursors = allMarks.Where(mark => IsCursor(mark, allMarks)).Select(mark => Rectangle.Inflate(mark, 2, 2)).ToList();
-            var marks = allMarks.Where(mark => !cursors.Any(cursor => cursor.Contains(mark))).ToList();
-            foreach (var cursor in cursors) Erase(cleanPixels, blankAreas[index], crop.Width, crop.Height, cursor);
+            var blank = blankAreas[index];
+            if (MatchesBlank(pixels, blank)) continue;
+            var (cleanPixels, layout) = Analyse(pixels, blank, crop.Width, crop.Height);
+            var background = Background(blank);
+            var cursors = layout.Marks.Where(mark => IsCursor(mark, layout.Marks)).ToList();
+            foreach (var cursor in cursors) Fill(cleanPixels, crop.Width, crop.Height, Rectangle.Inflate(cursor, 2, 2), background);
+            var lines = SegmentWords(layout.Lines, layout.Marks.Except(cursors).ToList(), layout.LetterHeight);
             using var cleaned = Image(cleanPixels, crop.Width, crop.Height);
-            var words = RecognizeWords(cleaned, PageSegMode.SparseText);
-            words.AddRange(RecoverMissed(cleaned, words, marks));
-            var text = Compose(words, marks);
+            var text = string.Join(" ", lines.Select(words => ReadLine(cleaned, words, layout, background)));
             if (text.Length == 0)
             {
-                if (DifferenceFraction(pixels, blankAreas[index]) <= BlankNoiseFraction) continue;
-                // Changed pixels but no readable words: symbols only, or text OCR could not read. Never clear on that basis.
+                if (DifferenceFraction(pixels, blank) <= BlankNoiseFraction) continue;
+                // Changed pixels but no text lines: symbols only, or text that could not be found. Never clear on that basis.
                 throw new InvalidOperationException("No readable text in the chat area (symbols only, or unreadable text). Last shared text is unchanged.");
             }
             parts.Add(text);
         }
         return string.Join(" ", parts);
+    }
+
+    // Rebuilds one text line with wide, even gaps between the words found from the pixels, reads it in one pass, and
+    // requires a confident reading for every word, so no word can silently disappear.
+    private string ReadLine(Bitmap cleaned, List<Rectangle> words, TextLayout layout, Color background)
+    {
+        var letter = layout.LetterHeight;
+        var pad = Math.Max(2, letter * 3 / 10);
+        var gap = Math.Max(8, letter * 3 / 2);
+        var bounds = new Rectangle(Point.Empty, cleaned.Size);
+        var crops = words.Select(word => Rectangle.Intersect(Rectangle.Inflate(word, pad, pad), bounds)).ToList();
+        var top = crops.Min(crop => crop.Top);
+        var stripHeight = crops.Max(crop => crop.Bottom) - top + 2 * gap;
+        var stripWidth = crops.Sum(crop => crop.Width) + gap * (crops.Count + 1);
+        // Tesseract reads best with letters roughly 30-40 pixels tall.
+        var scale = Math.Clamp(36.0 / letter, 1.0, 4.0);
+        using var strip = new Bitmap((int)Math.Ceiling(stripWidth * scale), (int)Math.Ceiling(stripHeight * scale), PixelFormat.Format32bppArgb);
+        var slots = new List<(double Left, double Right)>();
+        using (var graphics = Graphics.FromImage(strip))
+        {
+            graphics.Clear(background);
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            var x = gap;
+            foreach (var crop in crops)
+            {
+                var target = new RectangleF((float)(x * scale), (float)((gap + crop.Top - top) * scale), (float)(crop.Width * scale), (float)(crop.Height * scale));
+                graphics.DrawImage(cleaned, target, crop, GraphicsUnit.Pixel);
+                slots.Add(((x - gap / 2.0) * scale, (x + crop.Width + gap / 2.0) * scale));
+                x += crop.Width + gap;
+            }
+        }
+        var found = Recognize(strip);
+        Diagnostics?.Invoke(strip, found);
+        var result = new List<string>();
+        for (var slot = 0; slot < slots.Count; slot++)
+        {
+            var pieces = found.Where(word => word.Box.Left + word.Box.Width / 2 >= slots[slot].Left &&
+                word.Box.Left + word.Box.Width / 2 < slots[slot].Right).OrderBy(word => word.Box.Left).ToList();
+            var text = string.Concat(pieces.Select(piece => piece.Text));
+            var confidence = pieces.Count == 0 ? 0 : pieces.Min(piece => piece.Confidence);
+            var shapes = layout.Marks.Where(mark => words[slot].Contains(mark)).ToList();
+            // A word that is one plain upright stroke: Tesseract guesses I, l, 1, ! or | for it, but in sans-serif
+            // fonts only "I" is an English word of that shape.
+            if (english && shapes.Count == 1 && IsStroke(shapes[0], letter))
+                (text, confidence) = ("I", Math.Max(confidence, AcceptConfidence));
+            if (text.Length == 0 || confidence < AcceptConfidence)
+                throw new InvalidOperationException("Part of the text could not be read reliably. Last shared text is unchanged.");
+            result.Add(text);
+        }
+        return string.Join(" ", result);
+    }
+
+    internal static bool IsStroke(Rectangle mark, int letterHeight) =>
+        mark.Width <= Math.Max(3, mark.Height / 4) && mark.Height >= letterHeight * 0.8 && mark.Height <= letterHeight * 2;
+
+    // Returns individual characters, so that the word slots decide word boundaries rather than Tesseract's spacing.
+    private List<OcrWord> Recognize(Bitmap image)
+    {
+        using var memory = new MemoryStream();
+        image.Save(memory, System.Drawing.Imaging.ImageFormat.Png);
+        using var pix = Pix.LoadFromMemory(memory.ToArray());
+        using var page = engine.Process(pix, PageSegMode.SingleLine);
+        var characters = new List<OcrWord>();
+        using var iterator = page.GetIterator();
+        iterator.Begin();
+        do
+        {
+            var text = iterator.GetText(PageIteratorLevel.Symbol)?.Trim();
+            if (string.IsNullOrEmpty(text) || !iterator.TryGetBoundingBox(PageIteratorLevel.Symbol, out var box)) continue;
+            characters.Add(new OcrWord(text, iterator.GetConfidence(PageIteratorLevel.Symbol), new RectangleF(box.X1, box.Y1, box.Width, box.Height)));
+        } while (iterator.Next(PageIteratorLevel.Symbol));
+        return characters;
     }
 
     // A text cursor is a thin upright stroke after the last mark of the bottom text row. Ignoring it stops a blinking
@@ -63,125 +143,100 @@ internal sealed class Recognizer : IDisposable
         !marks.Any(other => other != mark && (other.Top >= mark.Bottom - 2 ||
             (other.Left >= mark.Right && other.Top < mark.Bottom && mark.Top < other.Bottom)));
 
-    // Sparse text detection can skip short isolated labels such as "I"; re-read uncovered letter marks on their own.
-    private List<OcrWord> RecoverMissed(Bitmap cleaned, List<OcrWord> words, List<Rectangle> marks)
+    // Groups each line's letter shapes into words by the horizontal gaps between them. Each shape belongs to the line
+    // it overlaps most. Returns lines top to bottom, words left to right; word boxes span the full line height.
+    internal static List<List<Rectangle>> SegmentWords(IReadOnlyList<Rectangle> lines, IReadOnlyList<Rectangle> marks, int letterHeight)
     {
-        var covered = words.Where(word => word.Confidence >= AcceptConfidence).Select(word => RectangleF.Inflate(word.Box, 3, 3)).ToList();
-        var groups = new List<Rectangle>();
-        foreach (var mark in marks.Where(mark => mark.Height >= 6 && !covered.Any(box => box.IntersectsWith(mark))).OrderBy(mark => mark.Left))
+        var ordered = lines.OrderBy(line => line.Top).ToList();
+        var members = ordered.Select(_ => new List<Rectangle>()).ToList();
+        foreach (var mark in marks)
         {
-            var index = groups.FindIndex(group => mark.Top < group.Bottom && group.Top < mark.Bottom &&
-                mark.Left - group.Right <= Math.Max(group.Height, mark.Height));
-            if (index >= 0) groups[index] = Rectangle.Union(groups[index], mark);
-            else groups.Add(mark);
+            var best = -1;
+            var bestOverlap = 0;
+            for (var i = 0; i < ordered.Count; i++)
+            {
+                var overlap = Math.Min(mark.Bottom, ordered[i].Bottom) - Math.Max(mark.Top, ordered[i].Top);
+                if (overlap > bestOverlap) (best, bestOverlap) = (i, overlap);
+            }
+            if (best >= 0) members[best].Add(mark);
         }
-        var recovered = new List<OcrWord>();
-        foreach (var group in groups.Take(24))
+        var result = new List<List<Rectangle>>();
+        for (var i = 0; i < ordered.Count; i++)
         {
-            // Neighbouring words give the recogniser language context (for example "I" rather than "l").
-            var pad = Math.Max(8, group.Height);
-            var region = Rectangle.Intersect(Rectangle.Inflate(group, pad * 8, pad / 2), new Rectangle(Point.Empty, cleaned.Size));
-            using var piece = cleaned.Clone(region, PixelFormat.Format32bppArgb);
-            recovered.AddRange(RecognizeWords(piece, PageSegMode.SingleLine)
-                .Select(word => word with { Box = new RectangleF(word.Box.X + region.X, word.Box.Y + region.Y, word.Box.Width, word.Box.Height) })
-                .Where(word => RectangleF.Inflate(word.Box, 1, 1).IntersectsWith(group))
-                .Select(word => english && word.Text is "I" or "l" && marks.Count(mark => word.Box.IntersectsWith(mark)) == 1
-                    // A lone upright stroke: in sans-serif fonts I and l are identical, and only "I" is an English word.
-                    ? word with { Text = "I", Confidence = Math.Max(word.Confidence, AcceptConfidence) }
-                    : word));
+            var words = new List<Rectangle>();
+            foreach (var mark in members[i].OrderBy(mark => mark.Left))
+            {
+                if (words.Count > 0 && mark.Left - words[^1].Right <= WordGap * letterHeight) words[^1] = Rectangle.Union(words[^1], mark);
+                else words.Add(mark);
+            }
+            if (words.Count > 0)
+                result.Add(words.Select(word => Rectangle.FromLTRB(word.Left, Math.Min(word.Top, ordered[i].Top), word.Right,
+                    Math.Max(word.Bottom, ordered[i].Bottom))).ToList());
         }
-        return recovered;
+        return result;
     }
 
-    private List<OcrWord> RecognizeWords(Bitmap crop, PageSegMode mode)
+    // Finds text lines: runs of similar-sized shapes whose vertical extents overlap and that sit close together, the
+    // way letters in words do. Returns each line's vertical band and the typical letter height.
+    internal static (List<Rectangle> Lines, int LetterHeight) TextLines(IReadOnlyList<Rectangle> shapes)
     {
-        // Small AAC labels recognise more reliably when enlarged.
-        var scale = crop.Width * crop.Height <= 1_000_000 ? 2 : 1;
-        using var scaled = new Bitmap(crop.Width * scale, crop.Height * scale, PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(scaled))
+        var candidates = shapes.Where(box => box.Height >= 4 && box.Width <= 4 * box.Height).ToList();
+        var parent = Enumerable.Range(0, candidates.Count).ToArray();
+        int Find(int i) => parent[i] == i ? i : parent[i] = Find(parent[i]);
+        for (var a = 0; a < candidates.Count; a++)
+            for (var b = a + 1; b < candidates.Count; b++)
+            {
+                Rectangle first = candidates[a], second = candidates[b];
+                var ratio = (double)Math.Max(first.Height, second.Height) / Math.Min(first.Height, second.Height);
+                var overlap = Math.Min(first.Bottom, second.Bottom) - Math.Max(first.Top, second.Top);
+                var gap = Math.Max(first.Left, second.Left) - Math.Min(first.Right, second.Right);
+                if (ratio <= 2 && overlap >= 0.5 * Math.Min(first.Height, second.Height) && gap <= 1.2 * Math.Max(first.Height, second.Height))
+                    parent[Find(a)] = Find(b);
+            }
+        var runs = Enumerable.Range(0, candidates.Count).GroupBy(Find).Where(group => group.Count() >= 2)
+            .Select(group => group.Select(i => candidates[i]).ToList()).ToList();
+        if (runs.Count == 0) return ([], 0);
+        // Lower median: letters normally outnumber picture parts, and pictures are larger than letters.
+        var heights = runs.SelectMany(run => run).Select(box => box.Height).Order().ToList();
+        var letterHeight = heights[(heights.Count - 1) / 2];
+        var lines = new List<Rectangle>();
+        foreach (var run in runs)
         {
-            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            graphics.DrawImage(crop, 0, 0, scaled.Width, scaled.Height);
+            var runHeight = run.Select(box => box.Height).Order().ElementAt((run.Count - 1) / 2);
+            if (runHeight < 0.6 * letterHeight || runHeight > 1.7 * letterHeight) continue;
+            var band = run.Aggregate(Rectangle.Union);
+            var index = lines.FindIndex(line => line.Top < band.Bottom && band.Top < line.Bottom);
+            if (index >= 0) lines[index] = Rectangle.Union(lines[index], band);
+            else lines.Add(band);
         }
-        using var memory = new MemoryStream();
-        scaled.Save(memory, System.Drawing.Imaging.ImageFormat.Png);
-        using var pix = Pix.LoadFromMemory(memory.ToArray());
-        // Sparse text finds labels scattered between symbols without assuming a single text block.
-        using var page = engine.Process(pix, mode);
-        var words = new List<OcrWord>();
-        using var iterator = page.GetIterator();
-        iterator.Begin();
-        do
-        {
-            var text = iterator.GetText(PageIteratorLevel.Word)?.Trim();
-            if (string.IsNullOrEmpty(text) || !iterator.TryGetBoundingBox(PageIteratorLevel.Word, out var box)) continue;
-            words.Add(new OcrWord(text, iterator.GetConfidence(PageIteratorLevel.Word),
-                new RectangleF((float)box.X1 / scale, (float)box.Y1 / scale, (float)box.Width / scale, (float)box.Height / scale)));
-        } while (iterator.Next(PageIteratorLevel.Word));
-        return words;
+        return (lines, letterHeight);
     }
 
-    // Keeps text-sized, confidently recognised words and orders them into reading order. Symbol artwork tends to
-    // produce low-confidence, punctuation-only or wrongly sized fragments, which are ignored.
-    internal static string Compose(IReadOnlyList<OcrWord> words, IReadOnlyList<Rectangle>? marks = null)
-    {
-        static bool HasAlphanumeric(OcrWord word) => word.Text.Any(char.IsLetterOrDigit);
-        var confident = words.Where(word => word.Confidence >= AcceptConfidence && HasAlphanumeric(word)).ToList();
-        if (confident.Count == 0)
-        {
-            if (words.Any(word => word.Confidence >= 30 && word.Text.Count(char.IsLetter) >= 3))
-                throw new InvalidOperationException("Text could not be read reliably. Last shared text is unchanged.");
-            return "";
-        }
-        var heights = confident.Select(word => word.Box.Height).Order().ToList();
-        // Lower median: when sizes tie, labels are smaller than symbol artwork misread as letters.
-        var textHeight = heights[(heights.Count - 1) / 2];
-        bool TextSized(OcrWord word) => word.Box.Height >= 0.4f * textHeight && word.Box.Height <= 1.8f * textHeight;
-        static float Middle(OcrWord word) => word.Box.Top + word.Box.Height / 2;
-
-        var lines = new List<List<OcrWord>>();
-        foreach (var word in confident.Where(TextSized).OrderBy(Middle))
-        {
-            var line = lines.LastOrDefault();
-            if (line is not null && Math.Abs(Middle(word) - line.Average(Middle)) <= 0.5f * textHeight) line.Add(word);
-            else lines.Add([word]);
-        }
-        // An unreadable word sitting in a text line would silently vanish from the message; refuse instead.
-        if (words.Any(word => word.Confidence < AcceptConfidence && HasAlphanumeric(word) && TextSized(word) &&
-            lines.Any(line => Math.Abs(Middle(word) - line.Average(Middle)) <= 0.35f * textHeight &&
-                line.Any(other => Math.Abs(other.Box.Height - word.Box.Height) <= 0.5f * textHeight))))
-            throw new InvalidOperationException("Part of the text could not be read reliably. Last shared text is unchanged.");
-        // A letter-sized mark on a text line that OCR did not turn into a word (for example a lone "I") must not vanish.
-        var accepted = lines.SelectMany(line => line).Select(word => RectangleF.Inflate(word.Box, 3, 3)).ToList();
-        if ((marks ?? []).Any(mark => mark.Height >= 0.5f * textHeight && mark.Height <= 1.8f * textHeight &&
-            lines.Any(line => Math.Abs(mark.Top + mark.Height / 2f - line.Average(Middle)) <= 0.5f * textHeight) &&
-            !accepted.Any(box => box.IntersectsWith(mark))))
-            throw new InvalidOperationException("Some text was not recognised. Last shared text is unchanged.");
-        return string.Join(" ", lines.Select(line => string.Join(" ", line.OrderBy(word => word.Box.Left).Select(word => word.Text))));
-    }
-
-    // Paints symbol artwork back to the empty background so OCR only sees text. Shapes are groups of connected pixels
-    // that differ from the empty reference; anything much taller than the typical letter is treated as a symbol.
-    internal static (byte[] Pixels, List<Rectangle> Marks) RemoveSymbols(byte[] pixels, byte[] blank, int width, int height)
+    // Splits the changed pixels into connected shapes and paints everything that is not text on a text line (symbol
+    // artwork, including small detached parts such as sparkles, speech bubbles or lips) with the background colour.
+    internal static (byte[] Cleaned, TextLayout Layout) Analyse(byte[] pixels, byte[] blank, int width, int height)
     {
         var count = width * height;
-        if (pixels.Length != count * 4 || blank.Length != pixels.Length) return (pixels, []);
+        if (pixels.Length != count * 4 || blank.Length != pixels.Length) throw new InvalidOperationException("The chat area changed size. Recalibrate.");
+        var background = Background(blank);
         var foreground = new bool[count];
         for (var i = 0; i < count; i++)
         {
             var o = i * 4;
-            foreground[i] = Math.Abs(pixels[o] - blank[o]) > 48 || Math.Abs(pixels[o + 1] - blank[o + 1]) > 48 ||
-                Math.Abs(pixels[o + 2] - blank[o + 2]) > 48;
+            // Ink must differ from both the empty reference and the background; this ignores where an old cursor was.
+            foreground[i] = Distance(pixels, o, blank[o], blank[o + 1], blank[o + 2]) > 48 &&
+                Distance(pixels, o, background.B, background.G, background.R) > 48;
         }
         var labels = new int[count];
-        var boxes = new List<Rectangle> { Rectangle.Empty };
+        var shapes = new List<Rectangle>();
+        var solid = new List<bool>();
         var stack = new Stack<int>();
         for (var start = 0; start < count; start++)
         {
             if (!foreground[start] || labels[start] != 0) continue;
-            var label = boxes.Count;
-            int left = width, top = height, right = -1, bottom = -1;
+            if (shapes.Count >= 4000) throw new InvalidOperationException("The chat area is too busy to read (a photo or pattern?). Last shared text is unchanged.");
+            var label = shapes.Count + 1;
+            int left = width, top = height, right = -1, bottom = -1, area = 0, edge = 0;
             labels[start] = label;
             stack.Push(start);
             while (stack.Count > 0)
@@ -189,6 +244,9 @@ internal sealed class Recognizer : IDisposable
                 var i = stack.Pop();
                 int x = i % width, y = i / width;
                 left = Math.Min(left, x); right = Math.Max(right, x); top = Math.Min(top, y); bottom = Math.Max(bottom, y);
+                area++;
+                if (x == 0 || y == 0 || x == width - 1 || y == height - 1 || !foreground[i - 1] || !foreground[i + 1] ||
+                    !foreground[i - width] || !foreground[i + width]) edge++;
                 for (var dy = -1; dy <= 1; dy++)
                     for (var dx = -1; dx <= 1; dx++)
                     {
@@ -200,40 +258,63 @@ internal sealed class Recognizer : IDisposable
                         stack.Push(n);
                     }
             }
-            boxes.Add(Rectangle.FromLTRB(left, top, right + 1, bottom + 1));
+            shapes.Add(Rectangle.FromLTRB(left, top, right + 1, bottom + 1));
+            // Letters are drawn with thin strokes; filled pictures are much thicker for their height.
+            solid.Add(2.0 * area / edge > Math.Max(4, 0.28 * (bottom - top + 1)));
         }
-        // Parts drawn inside a larger shape (eyes in a face, details in a picture) say nothing about letter size.
-        var outer = boxes.Skip(1).Where(box => box.Height >= 4 &&
-            !boxes.Skip(1).Any(other => other != box && other.Contains(box) && other.Width * other.Height > box.Width * box.Height)).ToList();
-        if (outer.Count == 0) return (pixels, []);
-        var heights = outer.Select(box => box.Height).Order().ToList();
-        // Lower median: letters normally outnumber symbols, and symbols are larger than their labels.
-        var letterHeight = heights[(heights.Count - 1) / 2];
-        var symbol = boxes.Select(box => box.Height > 2.2 * letterHeight).ToArray();
-        var marks = outer.Where(box => box.Height <= 2.2 * letterHeight).ToList();
-        if (!symbol.Any(value => value)) return (pixels, marks);
+        // Parts drawn inside a larger shape (eyes in a face, pictures in a grid) are judged by the shape around them.
+        static long Area(Rectangle box) => (long)box.Width * box.Height;
+        var containers = shapes.Select(box => shapes.Where(other => Area(other) > Area(box) && other.Contains(box)).ToList()).ToList();
+        var (lines, letterHeight) = TextLines(shapes.Where((_, i) => containers[i].Count == 0 && !solid[i]).ToList());
+        bool OnLine(Rectangle box) => box.Height <= 2.2 * letterHeight && lines.Any(line =>
+            box.Top >= line.Top - letterHeight / 2 && box.Bottom <= line.Bottom + letterHeight / 2);
+        var keep = shapes.Select((box, i) => OnLine(box) && containers[i].All(OnLine)).ToArray();
+        var marks = shapes.Where((box, i) => keep[i] && containers[i].Count == 0 && box.Height >= 4).ToList();
         var cleaned = pixels.ToArray();
-        const int margin = 2; // also removes the faint anti-aliased edge of each symbol
+        const int margin = 2; // also removes the faint anti-aliased edge around each symbol
         for (var y = 0; y < height; y++)
             for (var x = 0; x < width; x++)
             {
                 var label = labels[y * width + x];
-                if (label == 0 || !symbol[label]) continue;
+                if (label == 0 || keep[label - 1]) continue;
                 for (var my = Math.Max(0, y - margin); my <= Math.Min(height - 1, y + margin); my++)
                     for (var mx = Math.Max(0, x - margin); mx <= Math.Min(width - 1, x + margin); mx++)
                     {
+                        var near = labels[my * width + mx];
+                        if (near != 0 && keep[near - 1]) continue;
                         var o = (my * width + mx) * 4;
-                        Array.Copy(blank, o, cleaned, o, 4);
+                        (cleaned[o], cleaned[o + 1], cleaned[o + 2], cleaned[o + 3]) = (background.B, background.G, background.R, 255);
                     }
             }
-        return (cleaned, marks);
+        return (cleaned, new TextLayout(lines, marks, letterHeight));
     }
 
-    private static void Erase(byte[] pixels, byte[] blank, int width, int height, Rectangle area)
+    private static int Distance(byte[] pixels, int o, byte b, byte g, byte r) =>
+        Math.Max(Math.Abs(pixels[o] - b), Math.Max(Math.Abs(pixels[o + 1] - g), Math.Abs(pixels[o + 2] - r)));
+
+    // The most common colour of the empty chat area.
+    internal static Color Background(byte[] blank)
+    {
+        var counts = new Dictionary<int, int>();
+        for (var o = 0; o + 3 < blank.Length; o += 4 * 7)
+        {
+            var key = blank[o] << 16 | blank[o + 1] << 8 | blank[o + 2];
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+        if (counts.Count == 0) return Color.White;
+        var best = counts.MaxBy(pair => pair.Value).Key;
+        return Color.FromArgb(255, best & 0xFF, (best >> 8) & 0xFF, best >> 16);
+    }
+
+    private static void Fill(byte[] pixels, int width, int height, Rectangle area, Color colour)
     {
         area.Intersect(new Rectangle(0, 0, width, height));
         for (var y = area.Top; y < area.Bottom; y++)
-            Array.Copy(blank, (y * width + area.Left) * 4, pixels, (y * width + area.Left) * 4, area.Width * 4);
+            for (var x = area.Left; x < area.Right; x++)
+            {
+                var o = (y * width + x) * 4;
+                (pixels[o], pixels[o + 1], pixels[o + 2], pixels[o + 3]) = (colour.B, colour.G, colour.R, 255);
+            }
     }
 
     private static Bitmap Image(byte[] pixels, int width, int height)

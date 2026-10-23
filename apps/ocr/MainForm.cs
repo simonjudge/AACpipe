@@ -172,8 +172,9 @@ internal sealed class MainForm : Form
         if (MessageBox.Show(this, "Is the AAC message EMPTY, with no text, symbols or placeholder inside the selected chat area?\n" +
             "The current image of the chat area becomes the blank reference.",
             "Confirm empty message", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-        var (frame, _) = await CaptureForSetup(selected, captureSize);
+        var (frame, mode) = await CaptureForSetup(selected, captureSize);
         using var reference = frame;
+        captureMode = mode;
         blankBands = Recognizer.Calibrate(frame, selector.Bands);
         status.Text = "Empty reference calibrated in memory. Start AACpipe, disable other content sources, then start sharing.";
     }
@@ -192,7 +193,7 @@ internal sealed class MainForm : Form
             await Task.Delay(400);
         }
         var capture = Task.Run(() => size is { } known
-            ? (WindowCapture.Capture(selected, mode, known, mode == CaptureMode.Screen ? regions : null), mode)
+            ? WindowCapture.Capture(selected, mode, known, regions)
             : WindowCapture.CaptureForSetup(selected));
         try { return await capture.WaitAsync(TimeSpan.FromSeconds(3)); }
         catch
@@ -294,12 +295,18 @@ internal sealed class MainForm : Form
         var mode = captureMode;
         var work = Task.Run(() =>
         {
-            using var frame = WindowCapture.Capture(selected, mode, captureSize, mode == CaptureMode.Screen ? bands : null);
-            return reader.Read(frame, bands, blanks);
+            var (frame, used) = WindowCapture.Capture(selected, mode, captureSize, bands);
+            using (frame) return (Text: reader.Read(frame, bands, blanks), Mode: used);
         });
         try
         {
-            var text = await work.WaitAsync(TimeSpan.FromSeconds(3), lifetime.Token);
+            var (text, used) = await work.WaitAsync(TimeSpan.FromSeconds(3), lifetime.Token);
+            if (used != captureMode)
+            {
+                // The app stopped providing window captures; screen capture needs this window out of the way.
+                captureMode = used;
+                WindowState = FormWindowState.Minimized;
+            }
             if (!sharing || session != generation) return;
             if (lastProbe == TimeSpan.MinValue || clock.Elapsed - lastProbe >= TimeSpan.FromSeconds(2))
             {

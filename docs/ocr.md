@@ -68,27 +68,31 @@ The module **does not identify or translate graphic symbols**; only the text
 labels are shared. On each frame:
 
 1. Pixels that differ from the empty reference are grouped into connected
-   shapes. Shapes much taller than the typical letter (more than 2.2 times the
-   median shape height) are treated as symbols and painted back to the empty
-   background before OCR, so symbol artwork cannot merge with labels.
-2. Tesseract reads the remaining text. Recognised words must be confident,
-   contain a letter or digit and be text-sized; symbol fragments that survive
-   step 1 are dropped. Words are ordered into lines top-to-bottom, then
-   left-to-right.
-3. Any letter-sized mark on a text line that was not recognised is re-read with
-   its neighbouring words as context. If it still cannot be read, the frame is
-   refused rather than silently dropping a word. For English, an isolated
-   upright stroke read as I or l is taken as "I" (the two are identical in many
-   sans-serif fonts). A thin upright stroke after the last word of the bottom
-   line is treated as the text cursor and ignored, so a lone "I" typed as the
-   very last word is shared once the next word appears.
+   shapes. **Text lines** are found from the layout: runs of similar-sized,
+   thin-stroked shapes sitting side by side the way letters do. Filled or
+   thick shapes (most symbol artwork) cannot start a text line.
+2. Everything that is not on a text line, or is much taller than its letters,
+   is painted with the background colour before OCR. This removes whole symbols
+   and also their small detached parts (sparkles, speech bubbles, motion lines).
+3. Letters on each line are grouped into words by the gaps between them, and
+   every word is read by Tesseract. **Every word must be read confidently**
+   (60% or more); otherwise the frame is refused and the last shared text is
+   held, rather than silently dropping or merging words. Lines are read
+   top-to-bottom, words left-to-right.
+4. For English, a word that is one plain upright stroke is taken as "I"
+   (Tesseract often guesses l, 1, ! or | for it). A thin upright stroke after
+   the last word of the bottom line is treated as the text cursor and ignored,
+   so a lone "I" typed as the very last word is shared once the next word appears.
 
+This was tuned against real Grid 3 (Voco Chat) labels and Widgit symbols.
 If the area changed but contains no readable text (for example symbols only),
 the last shared text is held and a warning is shown; this never clears the
 partner display. Limitations: labels touching or overlapping their symbol may
-be removed with it; symbols drawn at text size, or mostly made of separate
-letter-sized parts, may be refused as unreadable text; labels much larger or
-smaller than the rest of the text may be ignored. Test with your own symbol set
+be removed with it; symbols drawn at text size in thin lines may be refused as
+unreadable text; labels much larger or smaller than the rest of the text may
+be ignored; a message made only of one-letter words (for example just "I")
+has no recognisable text line and is held until more is typed. Dark themes are
+untested. Test with your own symbol set
 and font size.
 
 ## Behaviour and controls
@@ -100,7 +104,7 @@ and font size.
 - Empty requires **both** a match to the calibrated blank pixels and repeated
   confirmation for at least 750 ms. No OCR text, low-confidence recognition or a
   black failed capture is not automatically an empty message.
-- A text-sized word with OCR confidence below 60% on a text line holds the last
+- Any word on a text line with OCR confidence below 60% holds the last
   shared message and reports a warning. Confidence is an engine heuristic, not a
   correctness guarantee.
 - Unchanged text generates no extra content commands. A status probe approximately
@@ -124,11 +128,14 @@ and font size.
 
 ## Capture and layout limitations
 
-Setup first tries Windows `PrintWindow` for the selected client area, which
-works even if the window is partly covered. Some applications, including
-Grid 3, refuse this ("did not provide a window capture") or return a blank
-frame. The companion then switches to **screen capture** of that window's
-client area for the rest of the session, and the status line says so:
+During setup the AAC window is brought to the front and its client area is
+copied from the screen. Windows `PrintWindow` (which works even while the
+window is partly covered) is also tried, and used only if it matches the
+screen. **Grid 3 does not support it**: its window is drawn with DirectComposition
+(`WS_EX_NOREDIRECTIONBITMAP`) and `PrintWindow` is refused with access denied.
+Such applications use **screen capture** of the window's client area, and the
+status line says so. If window capture stops working later, sharing switches
+to screen capture automatically instead of failing:
 
 - The OCR window hides itself briefly while capturing during setup, and
   minimises when sharing starts. Grid is brought to the front for setup.
@@ -192,7 +199,7 @@ npm run ocr:test
 ```
 
 The executable test harness checks stabilisation and exact blank timing,
-deduplication, UTF-8 limits, word filtering/ordering, actual native-engine
+deduplication, UTF-8 limits, text-line/word layout and symbol erasing, actual native-engine
 recognition of a Grid-like two-line chat bar with original geometric symbols
 above each label (including a lone "I"), symbol-only refusal, cursor tolerance,
 blank/failure distinction, real Windows window and screen capture with an

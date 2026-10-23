@@ -36,27 +36,53 @@ internal static class WindowCapture
         return windows.OrderBy(window => window.Title).ToList();
     }
 
-    // Used during setup: try window capture first, then fall back to the visible screen pixels.
+    // Used during setup. Window capture is preferred because it works while the window is covered, but some apps
+    // (including Grid 3) refuse it, return blank frames or return stale frames. It is only trusted if it matches
+    // what is actually on screen; otherwise the visible screen pixels are used.
     internal static (Bitmap Frame, CaptureMode Mode) CaptureForSetup(WindowTarget target)
     {
         var size = ClientSize(target, null);
+        // This process was just clicked, so Windows allows it to bring the AAC window to the front.
+        if (GetForegroundWindow() != target.Handle && SetForegroundWindow(target.Handle)) Thread.Sleep(300);
+        var screen = CopyFromScreen(target, size, null);
         Bitmap? printed = null;
         try { printed = PrintClient(target, size); }
         catch (InvalidOperationException) { }
-        if (printed is not null)
+        if (printed is not null && !IsUniform(printed) && (!FullyVisible(target, size) ||
+            Recognizer.DifferenceFraction(Recognizer.Pixels(printed), Recognizer.Pixels(screen)) <= 0.05))
         {
-            if (!IsUniform(printed)) return (printed, CaptureMode.Window);
-            printed.Dispose();
+            screen.Dispose();
+            return (printed, CaptureMode.Window);
         }
-        // The screen fallback can only see the window if it is in front; this process was just clicked, so it may raise it.
-        if (GetForegroundWindow() != target.Handle && SetForegroundWindow(target.Handle)) Thread.Sleep(300);
-        return (CopyFromScreen(target, size, null), CaptureMode.Screen);
+        printed?.Dispose();
+        return (screen, CaptureMode.Screen);
     }
 
-    internal static Bitmap Capture(WindowTarget target, CaptureMode mode, Size expectedSize, IReadOnlyList<Rectangle>? mustBeVisible)
+    // Returns the mode actually used: window capture permanently falls back to screen capture if the app stops providing it.
+    internal static (Bitmap Frame, CaptureMode Mode) Capture(WindowTarget target, CaptureMode mode, Size expectedSize, IReadOnlyList<Rectangle> regions)
     {
         var size = ClientSize(target, expectedSize);
-        return mode == CaptureMode.Window ? PrintClient(target, size) : CopyFromScreen(target, size, mustBeVisible);
+        if (mode == CaptureMode.Window)
+        {
+            try
+            {
+                var printed = PrintClient(target, size);
+                if (!IsUniform(printed)) return (printed, CaptureMode.Window);
+                printed.Dispose();
+            }
+            catch (InvalidOperationException) { }
+        }
+        return (CopyFromScreen(target, size, regions), CaptureMode.Screen);
+    }
+
+    private static bool FullyVisible(WindowTarget target, Size size)
+    {
+        try
+        {
+            EnsureVisible(target, ClientOrigin(target), new Rectangle(Point.Empty, size));
+            return true;
+        }
+        catch (InvalidOperationException) { return false; }
     }
 
     private static Size ClientSize(WindowTarget target, Size? expectedSize)

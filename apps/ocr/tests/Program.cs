@@ -14,16 +14,18 @@ internal static class Program
     {
         // The same executable is a deterministic child-process bridge fixture.
         if (args.Contains("--json")) return FakeBridge(args);
+        // Match the app (PerMonitorV2) so window and screen coordinates are both physical pixels.
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         try
         {
             TestTracker();
             TestBridgeParsing();
             TestBridgeTransport().GetAwaiter().GetResult();
             var modelPath = args.Length > 0 ? Path.GetFullPath(args[0]) : throw new ArgumentException("Pass the tessdata directory.");
-            TestCompose();
+            TestLayout();
             TestRecognition(modelPath);
             TestWindowCapture();
-            Console.WriteLine($"PASS: {passed} assertions (tracking, bridge, word filtering, actual OCR with symbols, capture).");
+            Console.WriteLine($"PASS: {passed} assertions (tracking, bridge, text layout, actual OCR with symbols, capture).");
             return 0;
         }
         catch (Exception error)
@@ -130,24 +132,47 @@ internal static class Program
         return 0;
     }
 
-    private static void TestCompose()
+    private static void TestLayout()
     {
-        static OcrWord Word(string text, float confidence, float x, float y, float height = 20) =>
-            new(text, confidence, new RectangleF(x, y, text.Length * 10, height));
-        Check(Recognizer.Compose([]) == "", "no words is empty");
-        Check(Recognizer.Compose([Word("drink", 90, 120, 80), Word("I", 88, 10, 82), Word("want", 91, 40, 80)]) == "I want drink",
-            "words on one line are ordered left to right");
-        Check(Recognizer.Compose([Word("today", 90, 10, 140), Word("Hello", 90, 10, 80)]) == "Hello today", "lines are ordered top to bottom");
-        Check(Recognizer.Compose([Word("Hello", 90, 10, 80), Word("~", 95, 10, 10, 60), Word("|", 70, 60, 80)]) == "Hello",
-            "punctuation-only symbol fragments are ignored");
-        Check(Recognizer.Compose([Word("Hello", 90, 10, 80), Word("OO", 90, 10, 0, 70)]) == "Hello", "symbol-sized letters are ignored");
-        Check(Recognizer.Compose([Word("Hello", 90, 10, 80), Word("xq", 20, 10, 10, 8)]) == "Hello", "small low-confidence specks are ignored");
-        Throws<InvalidOperationException>(() => Recognizer.Compose([Word("Hello", 90, 10, 80), Word("partnr", 35, 70, 80)]),
-            "an unreadable word inside a text line is refused, not dropped");
-        Throws<InvalidOperationException>(() => Recognizer.Compose([Word("Hellq", 40, 10, 80)]), "only low-confidence text is refused");
-        Check(Recognizer.Compose([Word("~~", 40, 10, 80)]) == "", "only symbol noise reads as no text");
-    }
+        // "Hi you": letters 16 px tall; letter gaps 2 px, word gap 8 px. A 60 px picture sits above.
+        Rectangle[] letters = [new(10, 100, 10, 16), new(22, 100, 4, 16), new(34, 104, 9, 12), new(45, 104, 9, 12), new(56, 104, 9, 12)];
+        var picture = new Rectangle(10, 20, 60, 60);
+        var (lines, letterHeight) = Recognizer.TextLines([.. letters, picture]);
+        Check(lines.Count == 1 && lines[0].Top == 100 && lines[0].Bottom == 116, "one text line is found below the picture");
+        Check(letterHeight is >= 12 and <= 16, $"letter height comes from the letters (actual: {letterHeight})");
+        var words = Recognizer.SegmentWords(lines, letters, letterHeight);
+        Check(words.Count == 1 && words[0].Count == 2 && words[0][0].Right == 26 && words[0][1].Left == 34, "letters are grouped into words by gap");
+        Check(Recognizer.TextLines([new Rectangle(10, 10, 3, 16)]).Lines.Count == 0, "a single shape is not a text line");
 
+        Rectangle[] twoRows = [new(10, 10, 9, 12), new(21, 10, 9, 12), new(10, 60, 9, 12), new(21, 60, 9, 12)];
+        var (rows, rowHeight) = Recognizer.TextLines(twoRows);
+        Check(rows.Count == 2, "two text rows are separate lines");
+        var rowWords = Recognizer.SegmentWords(rows, twoRows, rowHeight);
+        Check(rowWords.Count == 2 && rowWords[0][0].Top == 10 && rowWords[1][0].Top == 60, "lines are ordered top to bottom");
+
+        Check(Recognizer.IsStroke(new Rectangle(0, 0, 3, 16), 12), "a plain upright stroke is a lone I");
+        Check(!Recognizer.IsStroke(new Rectangle(0, 0, 9, 16), 12), "a wide letter is not a stroke");
+        Check(!Recognizer.IsStroke(new Rectangle(0, 0, 2, 5), 12), "a short tick is not a stroke");
+
+        // A detached symbol fragment near, but not on, the text line is erased; letters on the line are kept.
+        using var image = new Bitmap(120, 140);
+        using (var graphics = Graphics.FromImage(image))
+        {
+            graphics.Clear(Color.White);
+            using var stroke = new Pen(Color.Black, 2) { Alignment = System.Drawing.Drawing2D.PenAlignment.Inset };
+            foreach (var letter in letters) graphics.DrawRectangle(stroke, letter);
+            graphics.FillEllipse(Brushes.SteelBlue, 10, 20, 60, 60);
+            graphics.FillRectangle(Brushes.Black, 80, 40, 6, 6);
+        }
+        using var blank = new Bitmap(120, 140);
+        using (var graphics = Graphics.FromImage(blank)) graphics.Clear(Color.White);
+        var (cleaned, layout) = Recognizer.Analyse(Recognizer.Pixels(image), Recognizer.Pixels(blank), 120, 140);
+        Check(layout.Marks.Count == letters.Length, $"only letters remain as marks (actual: {layout.Marks.Count})");
+        static bool White(byte[] pixels, int x, int y) => pixels[(y * 120 + x) * 4] > 200 && pixels[(y * 120 + x) * 4 + 1] > 200;
+        Check(White(cleaned, 40, 50) && White(cleaned, 82, 42), "the picture and its detached fragment are erased");
+        Check(!White(cleaned, 10, 108), "letters are kept");
+        Check(Recognizer.Background(Recognizer.Pixels(blank)).ToArgb() == Color.White.ToArgb(), "background is the blank's main colour");
+    }
     // Original geometric pictures, not third-party symbol artwork.
     private static void DrawSymbol(Graphics graphics, int kind, int x, int y)
     {
@@ -229,6 +254,7 @@ internal static class Program
         using var symbolsOnly = (Bitmap)empty.Clone();
         using (var graphics = Graphics.FromImage(symbolsOnly))
             for (var kind = 0; kind < 6; kind++) DrawSymbol(graphics, kind, 30 + kind * 90, 20);
+        try { Console.WriteLine("  symbols-only read as: \"" + recognizer.Read(symbolsOnly, area, blanks) + "\""); } catch (InvalidOperationException) { }
         Throws<InvalidOperationException>(() => recognizer.Read(symbolsOnly, area, blanks), "symbols without readable text never clear the partner display");
 
         using var cursor = (Bitmap)empty.Clone();
@@ -280,7 +306,7 @@ internal static class Program
             Check(setup.Size == form.ClientSize, "capture matches client-area dimensions");
             Check(!WindowCapture.IsUniform(setup), "capture contains rendered content");
         }
-        using (var screen = Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area)))
+        using (var screen = Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area)).Frame)
         {
             Check(screen.Size == form.ClientSize, "screen fallback matches client-area dimensions");
             Check(!WindowCapture.IsUniform(screen), "screen fallback contains rendered content");
@@ -295,16 +321,16 @@ internal static class Program
             for (var i = 0; i < 20; i++) { Application.DoEvents(); Thread.Sleep(10); }
             Throws<InvalidOperationException>(() => Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area)),
                 "a covered chat area is refused in screen mode");
-            Check(Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, [new Rectangle(10, 150, 480, 40)])) is { } uncovered && uncovered.Size == form.ClientSize,
+            Check(Pump(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, [new Rectangle(10, 150, 480, 40)])).Frame is { } uncovered && uncovered.Size == form.ClientSize,
                 "uncovered regions are still captured");
         }
         using var plain = new Bitmap(4, 4);
         using (var graphics = Graphics.FromImage(plain)) graphics.Clear(Color.Black);
         Check(WindowCapture.IsUniform(plain), "uniform failed captures are detected");
-        Throws<InvalidOperationException>(() => WindowCapture.Capture(target, CaptureMode.Window, new Size(1, 1), null), "layout changes rejected");
+        Throws<InvalidOperationException>(() => WindowCapture.Capture(target, CaptureMode.Window, new Size(1, 1), area), "layout changes rejected");
         form.Hide();
         Throws<InvalidOperationException>(() => WindowCapture.Capture(target, CaptureMode.Screen, form.ClientSize, area), "unavailable window is not blank");
-        Throws<InvalidOperationException>(() => WindowCapture.Capture(target with { ProcessId = uint.MaxValue }, CaptureMode.Window, form.ClientSize, null),
+        Throws<InvalidOperationException>(() => WindowCapture.Capture(target with { ProcessId = uint.MaxValue }, CaptureMode.Window, form.ClientSize, area),
             "never attach to reused window from another process");
     }
 }
