@@ -20,6 +20,13 @@ normal communication or speech output. Always keep that normal route available.
 
 ## Stored data
 
+The optional [OCR companion](ocr.md) processes the selected application window
+locally and sends only recognised text through the bridge. It saves configuration
+separately under `%LOCALAPPDATA%\AACpipe.Ocr`, not screenshots, blank calibration
+images or message history. Its on-screen preview and process memory can contain
+communication content. OCR shares only user-selected text bands; symbols above
+the text must be excluded during setup.
+
 - Windows: permanent pairing metadata and DPAPI-protected secrets,
   revocation tombstones and discovery identity under `%LOCALAPPDATA%\AACpipe`.
   Message text is held in memory, not intentionally saved as history.

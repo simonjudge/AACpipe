@@ -1,0 +1,28 @@
+AACpipe OCR companion - third-party components
+
+The companion bundles the .NET Windows Desktop runtime when published with
+--self-contained, the Tesseract .NET wrapper and its native Tesseract/Leptonica
+libraries, and English recognition data from tessdata_fast.
+
+.NET runtime and Windows Forms: MIT
+https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+https://github.com/dotnet/winforms/blob/main/LICENSE.TXT
+
+Tesseract .NET wrapper 5.2.0: Apache-2.0
+https://github.com/charlesw/tesseract
+
+Tesseract OCR: Apache-2.0
+https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE
+
+tessdata_fast English model: Apache-2.0
+Revision: 87416418657359cb625c412a48b6e1d6d41c29bd
+SHA-256: 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2
+https://github.com/tesseract-ocr/tessdata_fast
+
+Leptonica: BSD-2-Clause
+https://github.com/DanBloomberg/leptonica/blob/master/leptonica-license.txt
+
+Native image libraries may include further components. Before distributing a
+release, collect the complete notices/license texts for the native binaries
+from the wrapper's binary distribution and retain the runtime's license files.
+This development build is not a signed or release-approved installer.

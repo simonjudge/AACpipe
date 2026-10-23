@@ -128,6 +128,10 @@ A signed installer remains later work.
 
 ## Build and install the Grid 3 test package
 
+The optional OCR companion has its own portable build and .NET prerequisites.
+See [standalone OCR development and setup](ocr.md). It does not change the
+Publisher installer or existing Grid command defaults.
+
 The unsigned per-user Windows installer is built with:
 
 ```powershell

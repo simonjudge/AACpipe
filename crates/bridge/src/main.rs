@@ -2,6 +2,7 @@
 
 use std::env;
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,7 +47,11 @@ struct Cli {
     #[arg(long)]
     status: bool,
     #[arg(long)]
+    json: bool,
+    #[arg(long)]
     text: Option<String>,
+    #[arg(long, conflicts_with = "text")]
+    text_stdin: bool,
     #[arg(long)]
     persistent: bool,
     #[arg(long)]
@@ -55,10 +60,14 @@ struct Cli {
     label: Option<String>,
     #[arg(long)]
     all: bool,
-    #[arg(long, conflicts_with = "hide")]
+    #[arg(long, conflicts_with_all = ["hide", "preserve_window"])]
     show: bool,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "preserve_window")]
     hide: bool,
+    #[arg(long)]
+    preserve_window: bool,
+    #[arg(long)]
+    no_autostart: bool,
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_MS, value_parser = clap::value_parser!(u32).range(100..=30_000))]
     timeout: u32,
 }
@@ -94,10 +103,12 @@ impl WindowRequest {
 struct ValidatedCli {
     action: Action,
     text: Option<String>,
+    text_stdin: bool,
     label: Option<String>,
     all: bool,
     window: Option<WindowRequest>,
     timeout_ms: u32,
+    no_autostart: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,7 +130,7 @@ struct Request {
     window: Option<&'static str>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum Response {
     Success {
@@ -168,8 +179,8 @@ fn validate_cli(cli: Cli) -> Result<ValidatedCli, String> {
     if cli.speak && management_actions > 0 {
         return Err("--speak cannot accompany a management command".to_owned());
     }
-    if cli.text.is_some() && !cli.word && !cli.sentence {
-        return Err("--text requires --word or --sentence".to_owned());
+    if (cli.text.is_some() || cli.text_stdin) && !cli.word && !cli.sentence {
+        return Err("--text and --text-stdin require --word or --sentence".to_owned());
     }
     if (cli.persistent || cli.ephemeral) && !cli.pair {
         return Err("--persistent and --ephemeral require --pair".to_owned());
@@ -214,6 +225,7 @@ fn validate_cli(cli: Cli) -> Result<ValidatedCli, String> {
     };
     // Content commands come from Grid, so keep the pairing window from covering it.
     let window = explicit_window.or(match action {
+        _ if cli.preserve_window => None,
         Action::Word { .. } | Action::Sentence { .. } | Action::Clear | Action::Speak => {
             Some(WindowRequest::Hide)
         }
@@ -223,10 +235,12 @@ fn validate_cli(cli: Cli) -> Result<ValidatedCli, String> {
     Ok(ValidatedCli {
         action,
         text: cli.text,
+        text_stdin: cli.text_stdin,
         label: cli.label.map(|label| label.trim().to_owned()),
         all: cli.all,
         window,
         timeout_ms: cli.timeout,
+        no_autostart: cli.no_autostart,
     })
 }
 
@@ -300,6 +314,32 @@ fn build_request(
         Action::Status | Action::Window => request.cmd = "status",
     }
     Ok(request)
+}
+
+fn read_text_input(mut input: impl Read) -> Result<String, (i32, String)> {
+    let mut bytes = Vec::new();
+    input
+        .by_ref()
+        .take((MAX_SENTENCE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            (
+                EXIT_PAYLOAD,
+                format!("cannot read text from stdin: {error}"),
+            )
+        })?;
+    if bytes.len() > MAX_SENTENCE_BYTES {
+        return Err((
+            EXIT_PAYLOAD,
+            "stdin text exceeds 65536 UTF-8 bytes".to_owned(),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        (
+            EXIT_PAYLOAD,
+            format!("stdin text is not valid UTF-8: {error}"),
+        )
+    })
 }
 
 fn publisher_path() -> Result<PathBuf, String> {
@@ -445,8 +485,12 @@ where
         };
         (code, error.to_string())
     })?;
-    let validated = validate_cli(cli).map_err(|error| (EXIT_ARGUMENTS, error))?;
+    let mut validated = validate_cli(cli).map_err(|error| (EXIT_ARGUMENTS, error))?;
+    if validated.text_stdin {
+        validated.text = Some(read_text_input(std::io::stdin().lock())?);
+    }
     let timeout_ms = validated.timeout_ms;
+    let no_autostart = validated.no_autostart;
     let start_hidden = validated.window == Some(WindowRequest::Hide);
     let request = build_request(validated, || clipboard_text(Duration::from_millis(500)))?;
     let request_id = request.id.clone();
@@ -456,23 +500,39 @@ where
         return Err((EXIT_PAYLOAD, "IPC request exceeds 128 KiB".to_owned()));
     }
     let pipe_name = default_pipe_name().map_err(|error| (EXIT_OTHER, error.to_string()))?;
-    let raw = transact_with_autostart(&pipe_name, &request_json, timeout_ms, start_hidden)?;
+    let raw = if no_autostart {
+        pipe_transact(&pipe_name, &request_json, timeout_ms)
+            .map_err(|error| (EXIT_PUBLISHER, error.to_string()))?
+    } else {
+        transact_with_autostart(&pipe_name, &request_json, timeout_ms, start_hidden)?
+    };
     validate_response(&raw, &request_id)
 }
 
 fn main() {
     match run_from(env::args_os()) {
-        Ok(Response::Success {
-            state,
-            revision,
-            channels,
-            subscribers,
-            ..
-        }) => {
-            if env::args().any(|argument| argument == "--status") {
-                println!(
-                    "AACpipe Publisher: state={state}, revision={revision}, channels={channels}, subscribers={subscribers}"
-                );
+        Ok(response @ Response::Success { .. }) => {
+            if env::args().any(|argument| argument == "--json") {
+                match serde_json::to_string(&response) {
+                    Ok(json) => println!("{json}"),
+                    Err(error) => {
+                        eprintln!("cannot encode Publisher response: {error}");
+                        std::process::exit(EXIT_OTHER);
+                    }
+                }
+            } else if env::args().any(|argument| argument == "--status") {
+                if let Response::Success {
+                    state,
+                    revision,
+                    channels,
+                    subscribers,
+                    ..
+                } = response
+                {
+                    println!(
+                        "AACpipe Publisher: state={state}, revision={revision}, channels={channels}, subscribers={subscribers}"
+                    );
+                }
             }
         }
         Ok(Response::Failure { .. }) => unreachable!("failures are converted to exit errors"),
@@ -609,6 +669,43 @@ mod tests {
         let validated = parse(&["bridge", "--sentence"]).unwrap();
         let request = build_request(validated, || Ok("clipboard sentence".to_owned())).unwrap();
         assert_eq!(request.text.as_deref(), Some("clipboard sentence"));
+    }
+
+    #[test]
+    fn stdin_is_explicit_bounded_utf8_and_preserves_text() {
+        let text = "quotes: \"hello\"\n日本語\r\n";
+        assert_eq!(read_text_input(text.as_bytes()).unwrap(), text);
+        assert_eq!(read_text_input(&[0xff][..]).unwrap_err().0, EXIT_PAYLOAD);
+        assert!(read_text_input(vec![b'x'; MAX_SENTENCE_BYTES].as_slice()).is_ok());
+        assert_eq!(
+            read_text_input(vec![b'x'; MAX_SENTENCE_BYTES + 1].as_slice())
+                .unwrap_err()
+                .0,
+            EXIT_PAYLOAD
+        );
+        let mut validated = parse(&[
+            "bridge",
+            "--sentence",
+            "--text-stdin",
+            "--preserve-window",
+            "--no-autostart",
+        ])
+        .unwrap();
+        assert!(validated.text_stdin);
+        assert!(validated.no_autostart);
+        assert_eq!(validated.window, None);
+        validated.text = Some(text.to_owned());
+        let request = build_request(validated, || panic!("must not read clipboard")).unwrap();
+        assert_eq!(request.text.as_deref(), Some(text));
+        assert_eq!(request.window, None);
+        for arguments in [
+            vec!["bridge", "--sentence", "--text-stdin", "--text", "x"],
+            vec!["bridge", "--clear", "--text-stdin"],
+            vec!["bridge", "--sentence", "--show", "--preserve-window"],
+            vec!["bridge", "--sentence", "--hide", "--preserve-window"],
+        ] {
+            assert!(parse(&arguments).is_err());
+        }
     }
 
     #[test]

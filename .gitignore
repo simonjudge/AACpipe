@@ -10,3 +10,8 @@ target/
 !.env.example
 release/
 artifacts/
+apps/ocr/bin/
+apps/ocr/obj/
+apps/ocr/tests/bin/
+apps/ocr/tests/obj/
+build/ocr-cache/
